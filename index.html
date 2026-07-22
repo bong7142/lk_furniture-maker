@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>가구 도면 제작 및 배치 시스템</title>
+    <!-- Google Fonts: Noto Sans KR & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Three.js & OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- App Stylesheet -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- TOP TOOLBAR -->
+        <header class="app-header">
+            <div class="logo-area">
+                <i data-lucide="layout"></i>
+                <h1>가구도면 제작·배치 시스템</h1>
+                <span class="badge">LK퍼니처[전용]</span>
+                <span class="creator-tag">Programming by Bong</span>
+            </div>
+            <div class="header-actions">
+                <button id="btn-new" class="btn-icon-text" title="새 프로젝트 초기화">
+                    <i data-lucide="file-plus"></i> 새 설계
+                </button>
+                <div class="divider"></div>
+                <button id="btn-save-json" class="btn-icon-text" title="설계 데이터 저장 (.json)">
+                    <i data-lucide="save"></i> 저장하기
+                </button>
+                <label for="input-load-json" class="btn-icon-text btn-label" title="설계 데이터 불러오기">
+                    <i data-lucide="folder-open"></i> 불러오기
+                    <input type="file" id="input-load-json" accept=".json" style="display: none;">
+                </label>
+                <div class="divider"></div>
+                <button id="btn-export-img" class="btn-icon-text" title="현재 도면을 이미지(PNG)로 저장">
+                    <i data-lucide="image"></i> 이미지 저장
+                </button>
+                <button id="btn-print" class="btn-icon-text btn-primary" title="도면 인쇄 (PDF)">
+                    <i data-lucide="printer"></i> 도면 인쇄
+                </button>
+            </div>
+        </header>
+
+        <!-- MAIN LAYOUT -->
+        <main class="app-body">
+            <!-- LEFT CONTROL PANEL -->
+            <aside class="control-panel scrollbar-custom">
+                <!-- Section 1: Room Dimensions -->
+                <section class="panel-section">
+                    <h2 class="section-title">
+                        <i data-lucide="home"></i>
+                        <span>현장(설치 공간) 치수 설정</span>
+                    </h2>
+                    <div class="input-grid">
+                        <div class="input-group">
+                            <label for="room-width">가로폭 (W) <span class="unit">mm</span></label>
+                            <input type="number" id="room-width" value="5000" min="1000" max="20000" step="100">
+                        </div>
+                        <div class="input-group">
+                            <label for="room-depth">깊이/세로 (D) <span class="unit">mm</span></label>
+                            <input type="number" id="room-depth" value="4000" min="1000" max="20000" step="100">
+                        </div>
+                        <div class="input-group">
+                            <label for="room-height">천장고 (H) <span class="unit">mm</span></label>
+                            <input type="number" id="room-height" value="2400" min="1500" max="4000" step="50">
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 2: Furniture Library -->
+                <section class="panel-section">
+                    <h2 class="section-title">
+                        <i data-lucide="package-plus"></i>
+                        <span>가구 라이브러리 추가</span>
+                    </h2>
+                    <div class="tabs-sub">
+                        <button class="tab-sub-btn active" data-category="kitchen">주방</button>
+                        <button class="tab-sub-btn" data-category="wardrobe">붙박이장</button>
+                        <button class="tab-sub-btn" data-category="shoe">신발장</button>
+                        <button class="tab-sub-btn" data-category="storage">수납장</button>
+                    </div>
+
+                    <!-- Category Items Container -->
+                    <div class="library-container">
+                        <!-- Kitchen Items -->
+                        <div class="library-grid active" id="lib-kitchen">
+                            <button class="lib-item" data-type="sink_base" data-category="kitchen">
+                                <i data-lucide="layers"></i>
+                                <span>싱크대 (하부)</span>
+                            </button>
+                            <button class="lib-item" data-type="sink_wall" data-category="kitchen">
+                                <i data-lucide="layout-template"></i>
+                                <span>싱크대 (상부)</span>
+                            </button>
+                            <button class="lib-item" data-type="fridge" data-category="kitchen">
+                                <i data-lucide="columns"></i>
+                                <span>냉장고장</span>
+                            </button>
+                            <button class="lib-item" data-type="island" data-category="kitchen">
+                                <i data-lucide="grid"></i>
+                                <span>아일랜드</span>
+                            </button>
+                            <button class="lib-item" data-type="tall_cabinet" data-category="kitchen">
+                                <i data-lucide="server"></i>
+                                <span>키큰장</span>
+                            </button>
+                            <button class="lib-item" data-type="microwave_cabinet" data-category="kitchen">
+                                <i data-lucide="monitor"></i>
+                                <span>전자렌지장</span>
+                            </button>
+                            <button class="lib-item" data-type="cooker_cabinet" data-category="kitchen">
+                                <i data-lucide="hard-drive"></i>
+                                <span>밥통장</span>
+                            </button>
+                            <button class="lib-item" data-type="drawer_2" data-category="kitchen">
+                                <i data-lucide="rows"></i>
+                                <span>서랍장 (2단)</span>
+                            </button>
+                            <button class="lib-item" data-type="drawer_3" data-category="kitchen">
+                                <i data-lucide="menu"></i>
+                                <span>서랍장 (3단)</span>
+                            </button>
+                        </div>
+
+                        <!-- Wardrobe Items -->
+                        <div class="library-grid" id="lib-wardrobe">
+                            <button class="lib-item" data-type="wardrobe_swing" data-category="wardrobe">
+                                <i data-lucide="door-open"></i>
+                                <span>붙박이장 (여닫이)</span>
+                            </button>
+                            <button class="lib-item" data-type="wardrobe_sliding" data-category="wardrobe">
+                                <i data-lucide="stretch-horizontal"></i>
+                                <span>붙박이장 (슬라이딩)</span>
+                            </button>
+                            <button class="lib-item" data-type="wardrobe_open" data-category="wardrobe">
+                                <i data-lucide="align-justify"></i>
+                                <span>오픈 옷장</span>
+                            </button>
+                        </div>
+
+                        <!-- Shoe Items -->
+                        <div class="library-grid" id="lib-shoe">
+                            <button class="lib-item" data-type="shoe_normal" data-category="shoe">
+                                <i data-lucide="square"></i>
+                                <span>일반 신발장</span>
+                            </button>
+                            <button class="lib-item" data-type="shoe_hanging" data-category="shoe">
+                                <i data-lucide="arrow-up-to-line"></i>
+                                <span>행잉형 신발장</span>
+                            </button>
+                        </div>
+
+                        <!-- Storage Items -->
+                        <div class="library-grid" id="lib-storage">
+                            <button class="lib-item" data-type="storage_open" data-category="storage">
+                                <i data-lucide="grid"></i>
+                                <span>오픈 수납장</span>
+                            </button>
+                            <button class="lib-item" data-type="storage_door" data-category="storage">
+                                <i data-lucide="sidebar"></i>
+                                <span>도어형 수납장</span>
+                            </button>
+                            <button class="lib-item" data-type="shelf_unit" data-category="storage">
+                                <i data-lucide="sliders"></i>
+                                <span>다용도 선반장</span>
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 3: Selected Furniture Properties -->
+                <section class="panel-section selected-furniture-section" id="props-panel" style="display: none;">
+                    <h2 class="section-title text-accent">
+                        <i data-lucide="edit-3"></i>
+                        <span>선택한 가구 속성 편집</span>
+                    </h2>
+                    <div class="properties-container">
+                        <div class="form-title" id="prop-type-name">싱크대 (하부)</div>
+                        
+                        <!-- Dimension Controls -->
+                        <div class="input-grid">
+                            <div class="input-group">
+                                <label for="prop-w">가로 (W) <span class="unit">mm</span></label>
+                                <input type="number" id="prop-w" min="100" max="3000" step="10">
+                            </div>
+                            <div class="input-group">
+                                <label for="prop-d">깊이 (D) <span class="unit">mm</span></label>
+                                <input type="number" id="prop-d" min="100" max="2000" step="10">
+                            </div>
+                            <div class="input-group">
+                                <label for="prop-h">높이 (H) <span class="unit">mm</span></label>
+                                <input type="number" id="prop-h" min="100" max="3000" step="10">
+                            </div>
+                        </div>
+
+                        <!-- Construction Details -->
+                        <div class="divider-sub">구조 및 부재 설정</div>
+                        <div class="input-grid">
+                            <div class="input-group">
+                                <label for="prop-t">목재 두께 (T) <span class="unit">mm</span></label>
+                                <select id="prop-t">
+                                    <option value="15">15 T</option>
+                                    <option value="18" selected>18 T</option>
+                                    <option value="24">24 T</option>
+                                    <option value="30">30 T</option>
+                                </select>
+                            </div>
+                            <div class="input-group">
+                                <label for="prop-color">마감 색상</label>
+                                <select id="prop-color">
+                                    <option value="#ffffff">매트 화이트</option>
+                                    <option value="#e6d9cc">내추럴 오크</option>
+                                    <option value="#8c6c53">다크 월넛</option>
+                                    <option value="#3a3e45">샌드 그레이</option>
+                                    <option value="#1c2024">차콜 블랙</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Backboard Groove (우라홈) -->
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="prop-groove" checked>
+                            <label for="prop-groove">우라홈(뒷판 홈파기) 적용</label>
+                        </div>
+                        <div class="input-grid groove-details" id="groove-settings">
+                            <div class="input-group">
+                                <label for="prop-groove-depth">홈 깊이 <span class="unit">mm</span></label>
+                                <input type="number" id="prop-groove-depth" value="9" min="3" max="15">
+                            </div>
+                            <div class="input-group">
+                                <label for="prop-groove-offset">뒷 여유 <span class="unit">mm</span></label>
+                                <input type="number" id="prop-groove-offset" value="15" min="5" max="50">
+                            </div>
+                        </div>
+
+                        <!-- Special Options depending on type -->
+                        <div class="divider-sub">세부 구성 설정</div>
+                        <div class="input-grid">
+                            <div class="input-group full-width" id="door-type-group">
+                                <label for="prop-door-type">도어 형태</label>
+                                <select id="prop-door-type">
+                                    <option value="none">문 없음 (오픈)</option>
+                                    <option value="swing_double">양개 여닫이</option>
+                                    <option value="swing_single_left">외개 여닫이 (좌경첩)</option>
+                                    <option value="swing_single_right">외개 여닫이 (우경첩)</option>
+                                    <option value="sliding">슬라이딩 도어</option>
+                                </select>
+                            </div>
+                            <div class="input-group full-width" id="handle-type-group">
+                                <label for="prop-handle-type-search">손잡이 타입 검색/선택</label>
+                                <div style="display: flex; gap: 4px; margin-bottom: 4px;">
+                                    <input type="text" id="prop-handle-type-search" placeholder="손잡이 종류 검색..." style="flex: 1; padding: 6px 10px; font-size: 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color); background: var(--bg-surface-hover); color: var(--text-primary);">
+                                    <button type="button" id="btn-clear-handle-search" style="padding: 6px; background: var(--bg-surface-hover); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center;"><i data-lucide="x" style="width: 14px; height: 14px;"></i></button>
+                                </div>
+                                <select id="prop-handle-type">
+                                    <option value="none">손잡이 없음 (터치식/기본)</option>
+                                    <option value="bar_vertical">돌출 바형 (세로형)</option>
+                                    <option value="bar_horizontal">돌출 바형 (가로형)</option>
+                                    <option value="button">원형 미니 버튼형</option>
+                                    <option value="cup">엔틱 조개형 (빈티지)</option>
+                                    <option value="mok_channel">목찬넬 가공 (나무 U/J홈 + 도어공제)</option>
+                                    <option value="c_channel">C찬넬 알루미늄 (금속 채널 + 도어공제)</option>
+                                    <option value="smart_bar">스마트바 (심플 알루미늄 라인)</option>
+                                </select>
+                            </div>
+                            <div class="input-group" id="shelf-count-group">
+                                <label for="prop-shelves">내부 선반 개수</label>
+                                <input type="number" id="prop-shelves" value="1" min="0" max="10">
+                            </div>
+                            <div class="input-group full-width" id="support-type-group">
+                                <label for="prop-support-type">하부 지지 방식</label>
+                                <select id="prop-support-type">
+                                    <option value="none">없음 (바닥 밀착)</option>
+                                    <option value="plinth">좌대 (걸레받이)</option>
+                                    <option value="legs">다릿발</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Dynamic Support Sub-Settings -->
+                        <div class="input-grid" style="margin-top: 8px; gap: 8px;">
+                            <!-- 좌대 전용 설정 (Plinth Settings) -->
+                            <div class="input-grid full-width" id="plinth-settings" style="display: none; grid-template-columns: 1fr 1fr; gap: 8px; grid-column: span 2;">
+                                <div class="input-group">
+                                    <label for="prop-plinth-height">좌대 높이 <span class="unit">mm</span></label>
+                                    <input type="number" id="prop-plinth-height" value="100" min="0" max="300" step="10">
+                                </div>
+                                <div class="input-group">
+                                    <label for="prop-plinth-setback">좌대 인입 <span class="unit">mm</span></label>
+                                    <input type="number" id="prop-plinth-setback" value="40" min="0" max="200" step="5">
+                                </div>
+                            </div>
+
+                            <!-- 다릿발 전용 설정 (Leg Settings) -->
+                            <div class="input-grid full-width" id="leg-settings" style="display: none; grid-template-columns: 1fr 1fr; gap: 8px; grid-column: span 2;">
+                                <div class="input-group">
+                                    <label for="prop-leg-type">다릿발 종류</label>
+                                    <select id="prop-leg-type">
+                                        <option value="plastic">플라스틱 조절발</option>
+                                        <option value="steel_round">원형 스틸 chrome</option>
+                                        <option value="steel_square">사각 블랙</option>
+                                        <option value="wood">원목 경사발</option>
+                                    </select>
+                                </div>
+                                <div class="input-group">
+                                    <label for="prop-leg-height">다릿발 높이 <span class="unit">mm</span></label>
+                                    <input type="number" id="prop-leg-height" value="100" min="20" max="300" step="10">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Positioning / Rotation -->
+                        <div class="divider-sub">좌표 및 배치 상세</div>
+                        <div class="input-grid">
+                            <div class="input-group">
+                                <label for="prop-pos-x">X 위치 <span class="unit">mm</span></label>
+                                <input type="number" id="prop-pos-x" step="10">
+                            </div>
+                            <div class="input-group">
+                                <label for="prop-pos-y">Y 위치 <span class="unit">mm</span></label>
+                                <input type="number" id="prop-pos-y" step="10">
+                            </div>
+                            <div class="input-group">
+                                <label for="prop-rotation">회전각</label>
+                                <select id="prop-rotation">
+                                    <option value="0">0° (전면)</option>
+                                    <option value="90">90° (우향)</option>
+                                    <option value="180">180° (배면)</option>
+                                    <option value="270">270° (좌향)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="prop-actions">
+                            <button id="btn-duplicate" class="btn-secondary">
+                                <i data-lucide="copy"></i> 복제하기
+                            </button>
+                            <button id="btn-delete" class="btn-danger">
+                                <i data-lucide="trash-2"></i> 삭제하기
+                            </button>
+                        </div>
+                    </div>
+                </section>
+                
+                <!-- If nothing selected prompt -->
+                <div class="no-selection-prompt" id="no-selection-prompt">
+                    <i data-lucide="mouse-pointer-click"></i>
+                    <p>도면에서 가구를 선택하거나 좌측 가구 라이브러리에서 가구를 추가하여 상세 배치를 시작하세요.</p>
+                </div>
+            </aside>
+
+            <!-- CENTER WORKSPACE -->
+            <div class="workspace-area">
+                <!-- VIEWPORT NAVIGATION TABS -->
+                <div class="workspace-header">
+                    <div class="viewport-tabs">
+                        <button id="tab-2d-plan" class="tab-btn active">
+                            <i data-lucide="map"></i> 2D 평면도 (Floor Plan)
+                        </button>
+                        <button id="tab-2d-elevation" class="tab-btn">
+                            <i data-lucide="table-properties"></i> 2D 입면도 (Elevation)
+                        </button>
+                        <button id="tab-3d" class="tab-btn">
+                            <i data-lucide="box"></i> 3D 입체도 (3D View)
+                        </button>
+                    </div>
+                    <div class="viewport-controls">
+                        <button id="btn-toggle-details" class="control-btn active" title="상세 부재 치수 표시 토글">
+                            <i data-lucide="pencil"></i> 상세치수
+                        </button>
+                        <button id="btn-toggle-grid" class="control-btn active" title="그리드 토글">
+                            <i data-lucide="grid"></i> 그리드
+                        </button>
+                        <button id="btn-toggle-snap" class="control-btn active" title="벽면/객체 스냅 토글">
+                            <i data-lucide="magnet"></i> 자동 흡착
+                        </button>
+                        <button id="btn-zoom-in" class="control-btn" title="확대">
+                            <i data-lucide="zoom-in"></i>
+                        </button>
+                        <button id="btn-zoom-out" class="control-btn" title="축소">
+                            <i data-lucide="zoom-out"></i>
+                        </button>
+                        <button id="btn-zoom-fit" class="control-btn" title="화면 맞춤">
+                            <i data-lucide="maximize"></i> 화면맞춤
+                        </button>
+                    </div>
+                </div>
+
+                <!-- VIEWPORT CONTAINERS -->
+                <div class="viewport-container" id="viewport-container">
+                    <!-- 2D Viewport Canvas -->
+                    <div class="viewport-wrapper active" id="wrapper-2d">
+                        <canvas id="canvas-2d"></canvas>
+                        <!-- Ruler & Legend Overlay -->
+                        <div class="ruler-x"></div>
+                        <div class="ruler-y"></div>
+                        <div class="view-legend">
+                            <span id="legend-view-type">2D 평면도 (TOP VIEW)</span>
+                            <span class="scale-info">Grid: 100mm, Snap: 50mm</span>
+                        </div>
+                    </div>
+
+                    <!-- 3D Viewport Three.js -->
+                    <div class="viewport-wrapper" id="wrapper-3d">
+                        <div id="canvas-3d-container"></div>
+                        <div class="three-controls-guide">
+                            <i data-lucide="mouse"></i> 드래그: 회전 | 우클릭: 이동 | 휠: 줌
+                            <div class="three-options">
+                                <button id="btn-3d-lock-rotate" class="three-opt-btn" title="3D 회전 잠금">
+                                    <i data-lucide="lock"></i> 회전 잠금
+                                </button>
+                                <div class="preset-group">
+                                    <button id="btn-3d-preset-iso" class="three-opt-btn-mini" title="등각도 뷰">ISO</button>
+                                    <button id="btn-3d-preset-front" class="three-opt-btn-mini" title="정면도 뷰">정면</button>
+                                    <button id="btn-3d-preset-top" class="three-opt-btn-mini" title="평면도 뷰">평면</button>
+                                    <button id="btn-3d-preset-side" class="three-opt-btn-mini" title="측면도 뷰">측면</button>
+                                </div>
+                                <button id="btn-3d-tech-style" class="three-opt-btn" title="도면 스타일 토글">
+                                    <i data-lucide="pencil-ruler"></i> 도면 스타일
+                                </button>
+                                <button id="btn-3d-wireframe" class="three-opt-btn" title="와이어프레임 토글">
+                                    <i data-lucide="codepen"></i> 투시선형
+                                </button>
+                                <button id="btn-3d-open-doors" class="three-opt-btn" title="도어 열기/닫기">
+                                    <i data-lucide="door-closed"></i> 도어 개폐
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RIGHT SIDEBAR: OUTLINE / PROPERTY LIST -->
+            <aside class="project-sidebar scrollbar-custom">
+                <section class="panel-section">
+                    <h2 class="section-title">
+                        <i data-lucide="list"></i>
+                        <span>배치된 가구 목록</span>
+                    </h2>
+                    <ul class="cabinet-list" id="cabinet-list">
+                        <!-- Placed Cabinets list item format dynamic -->
+                    </ul>
+                    <div class="cabinet-list-empty" id="cabinet-list-empty">
+                        배치된 가구가 없습니다.
+                    </div>
+                </section>
+                
+                <section class="panel-section manual-guide">
+                    <h2 class="section-title">
+                        <i data-lucide="help-circle"></i>
+                        <span>사용 방법 및 단축키</span>
+                    </h2>
+                    <ul class="guide-list">
+                        <li><strong>드래그:</strong> 가구를 이동합니다.</li>
+                        <li><strong>R 키:</strong> 선택한 가구를 90도 회전합니다.</li>
+                        <li><strong>Delete / Del:</strong> 선택 가구 삭제.</li>
+                        <li><strong>Ctrl + D:</strong> 선택 가구 복제.</li>
+                        <li><strong>마우스 휠:</strong> 2D 도면 확대/축소.</li>
+                        <li><strong>우라홈(뒷판 홈):</strong> 목재 두께와 뒷판의 깊이를 차감하여 상세 도면을 생성합니다.</li>
+                    </ul>
+                </section>
+            </aside>
+        </main>
+
+        <!-- STATUS BAR -->
+        <footer class="app-status-bar">
+            <div class="status-item">
+                <i data-lucide="info"></i>
+                <span id="status-message">도면 시스템이 준비되었습니다.</span>
+            </div>
+            <div class="status-item right">
+                <span id="status-coords">X: 0, Y: 0 mm</span>
+                <div class="divider"></div>
+                <span id="status-furniture-count">배치 가구: 0개</span>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Print Layout Template (Hidden by default) -->
+    <div id="print-container" class="print-only">
+        <div class="print-header">
+            <h2>가구 설계 및 설치 도면</h2>
+            <div class="print-meta">
+                <span>일시: <span id="print-date">2026. 07. 22</span></span>
+                <span>현장 치수: <span id="print-room-dims">5000 x 4000 x 2400 mm</span></span>
+            </div>
+        </div>
+        <div class="print-canvas-area">
+            <img id="print-image" src="" alt="도면 이미지">
+        </div>
+        <div class="print-footer">
+            <div class="print-table-title">배치 가구 목록 명세</div>
+            <table class="print-table" id="print-cabinet-table">
+                <thead>
+                    <tr>
+                        <th>No.</th>
+                        <th>구분 (유형)</th>
+                        <th>가로 (W)</th>
+                        <th>깊이 (D)</th>
+                        <th>높이 (H)</th>
+                        <th>두께 (T)</th>
+                        <th>우라홈</th>
+                        <th>도어 타입</th>
+                        <th>수량</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Populated dynamically via JS during print -->
+                </tbody>
+            </table>
+            <div class="signature-section">
+                <div class="sig-box">설계 검토 (인)</div>
+                <div class="sig-box">고객 확인 (인)</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 도면 미리보기 모달 (Preview Modal Overlay) -->
+    <div id="preview-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-container">
+            <div class="modal-header">
+                <h3>도면 인쇄 미리보기</h3>
+                <div class="modal-actions">
+                    <button id="btn-modal-print" class="btn-primary">
+                        <i data-lucide="printer"></i> 실제 인쇄
+                    </button>
+                    <button id="btn-modal-close" class="btn-secondary">
+                        <i data-lucide="x"></i> 닫기
+                    </button>
+                </div>
+            </div>
+            <div class="modal-body scrollbar-custom">
+                <div class="paper-sheet">
+                    <div class="print-header">
+                        <h2>가구 설계 및 설치 도면</h2>
+                        <div class="print-meta">
+                            <span>일시: <span id="preview-date">2026. 07. 22</span></span>
+                            <span>현장 치수: <span id="preview-room-dims">5000 x 4000 x 2400 mm</span></span>
+                        </div>
+                    </div>
+                    <div class="print-canvas-area">
+                        <img id="preview-image" src="" alt="도면 이미지">
+                    </div>
+                    <div class="print-footer">
+                        <div class="print-table-title">배치 가구 목록 명세</div>
+                        <table class="print-table" id="preview-cabinet-table">
+                            <thead>
+                                <tr>
+                                    <th>No.</th>
+                                    <th>구분 (유형)</th>
+                                    <th>가로 (W)</th>
+                                    <th>깊이 (D)</th>
+                                    <th>높이 (H)</th>
+                                    <th>두께 (T)</th>
+                                    <th>우라홈</th>
+                                    <th>도어 타입</th>
+                                    <th>수량</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                        <div class="signature-section">
+                            <div class="sig-box">설계 검토 (인)</div>
+                            <div class="sig-box">고객 확인 (인)</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Logic Script -->
+    <script src="script.js"></script>
+    <script>
+        // Initialize lucide icons
+        lucide.createIcons();
+    </script>
+</body>
+</html>
