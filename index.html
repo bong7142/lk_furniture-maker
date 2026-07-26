@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>가구 도면 제작 및 배치 시스템</title>
+    <title>가구 도면 제작 및 배치 시스템 v0.5</title>
     <!-- Google Fonts: Noto Sans KR & Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -95,13 +95,17 @@
                                 <i data-lucide="layers"></i>
                                 <span>싱크대 (하부)</span>
                             </button>
+                            <button class="lib-item" data-type="sink_corner" data-category="kitchen">
+                                <i data-lucide="corner-down-right"></i>
+                                <span>싱크대 코너장</span>
+                            </button>
                             <button class="lib-item" data-type="sink_wall" data-category="kitchen">
                                 <i data-lucide="layout-template"></i>
                                 <span>싱크대 (상부)</span>
                             </button>
                             <button class="lib-item" data-type="fridge" data-category="kitchen">
                                 <i data-lucide="columns"></i>
-                                <span>냉장고장</span>
+                                <span>냉장고 설치장</span>
                             </button>
                             <button class="lib-item" data-type="island" data-category="kitchen">
                                 <i data-lucide="grid"></i>
@@ -224,6 +228,31 @@
                             </div>
                         </div>
 
+                        <!-- Sink base filler panels -->
+                        <div id="sink-filler-settings" style="display:none;">
+                            <div class="divider-sub">싱크대 멍판 설정</div>
+                            <div class="input-grid">
+                                <div class="input-group full-width">
+                                    <label for="prop-filler-side">멍판 위치</label>
+                                    <select id="prop-filler-side">
+                                        <option value="none">멍판 없음</option>
+                                        <option value="left">좌멍</option>
+                                        <option value="right">우멍</option>
+                                        <option value="both">좌멍 + 우멍</option>
+                                    </select>
+                                </div>
+                                <div class="input-group" id="left-filler-size-group">
+                                    <label for="prop-left-filler-width">좌멍 크기 <span class="unit">mm</span></label>
+                                    <input type="number" id="prop-left-filler-width" min="0" max="500" step="1" value="50">
+                                </div>
+                                <div class="input-group" id="right-filler-size-group">
+                                    <label for="prop-right-filler-width">우멍 크기 <span class="unit">mm</span></label>
+                                    <input type="number" id="prop-right-filler-width" min="0" max="500" step="1" value="50">
+                                </div>
+                            </div>
+                            <p class="internal-help">멍판은 몸통 높이와 동일한 별도 판재로 자동 산출됩니다.</p>
+                        </div>
+
                         <!-- Backboard Groove (우라홈) -->
                         <div class="checkbox-group">
                             <input type="checkbox" id="prop-groove" checked>
@@ -314,6 +343,54 @@
                                     <input type="number" id="prop-leg-height" value="100" min="20" max="300" step="10">
                                 </div>
                             </div>
+                        </div>
+
+                        <!-- Internal Layout Editor -->
+                        <div class="divider-sub">내부 구성 편집 <span class="version-chip">v0.6</span></div>
+                        <div class="internal-editor" id="internal-editor">
+                            <div class="horizontal-split-toolbar">
+                                <div>
+                                    <strong>가로 분할(상·하 통 분리)</strong>
+                                    <span>키큰장을 상부장·하부장처럼 별도 제작·조립하도록 나눕니다.</span>
+                                </div>
+                                <button type="button" id="btn-add-row" class="internal-fit-btn"><i data-lucide="rows-3"></i> 가로칸 추가</button>
+                            </div>
+                            <div id="internal-row-list" class="internal-row-list"></div>
+                            <div class="internal-summary">
+                                <span>내부 높이 <strong id="internal-total-height">0</strong>mm</span>
+                                <span>가로분할 합계 <strong id="internal-used-height">0</strong>mm</span>
+                            </div>
+                            <div id="internal-height-warning" class="internal-height-warning"></div>
+                            <button type="button" id="btn-row-auto-fit" class="internal-fit-btn">
+                                <i data-lucide="wand-sparkles"></i> 가로칸 높이 자동 맞춤
+                            </button>
+                            <button type="button" id="btn-auto-horizontal-split" class="internal-fit-btn">
+                                <i data-lucide="split-square-horizontal"></i> 긴 장 자동 2분할
+                            </button>
+                            <p class="internal-help">각 가로칸 안에서 다시 세로 분할하고, 좌우 칸마다 선반·옷봉·서랍·우산함을 구성할 수 있습니다.</p>
+                        </div>
+
+                        <!-- Parts Engine v0.6 -->
+                        <div class="divider-sub">판재 자동 생성 <span class="version-chip">v0.6</span></div>
+                        <div class="parts-engine" id="parts-engine">
+                            <div class="parts-toolbar">
+                                <div>
+                                    <strong>가구 → 판재 자동 분해</strong>
+                                    <span>몸통·가로분할판·세로칸막이·선반·뒤판·문짝을 자동 계산합니다.</span>
+                                </div>
+                                <button type="button" id="btn-refresh-parts" class="internal-fit-btn">판재 다시 계산</button>
+                            </div>
+                            <div class="parts-summary">
+                                <span>판재 종류 <strong id="parts-kind-count">0</strong></span>
+                                <span>총 수량 <strong id="parts-total-qty">0</strong>EA</span>
+                            </div>
+                            <div class="parts-table-wrap">
+                                <table class="parts-table">
+                                    <thead><tr><th>부재명</th><th>역할</th><th>두께</th><th>가로</th><th>세로</th><th>수량</th></tr></thead>
+                                    <tbody id="parts-table-body"><tr><td colspan="6">가구를 선택하세요.</td></tr></tbody>
+                                </table>
+                            </div>
+                            <p class="internal-help">현재 버전은 기본 판재 산출 엔진입니다. 다음 단계에서 전체 가구 BOM 통합·엑셀 출력으로 연결됩니다.</p>
                         </div>
 
                         <!-- Positioning / Rotation -->
@@ -412,7 +489,7 @@
                     <div class="viewport-wrapper" id="wrapper-3d">
                         <div id="canvas-3d-container"></div>
                         <div class="three-controls-guide">
-                            <i data-lucide="mouse"></i> 드래그: 회전 | 우클릭: 이동 | 휠: 줌
+                            <i data-lucide="mouse"></i> 가구 드래그: 이동 | 빈 공간 드래그: 회전 | 우클릭: 화면 이동 | 휠: 줌
                             <div class="three-options">
                                 <button id="btn-3d-lock-rotate" class="three-opt-btn" title="3D 회전 잠금">
                                     <i data-lucide="lock"></i> 회전 잠금
@@ -453,6 +530,28 @@
                     </div>
                 </section>
                 
+                <section class="panel-section quick-layout-section">
+                    <h2 class="section-title">
+                        <i data-lucide="align-horizontal-space-around"></i>
+                        <span>빠른 자동 배치</span>
+                    </h2>
+                    <div class="quick-layout-grid">
+                        <button id="btn-place-right" class="quick-layout-btn" title="선택한 가구를 가장 가까운 가구 오른쪽에 붙여 배치">
+                            <i data-lucide="panel-right-open"></i>
+                            <span>선택 가구 오른쪽 배치</span>
+                        </button>
+                        <button id="btn-compact-back-wall" class="quick-layout-btn" title="모든 가구를 뒤벽 기준으로 왼쪽부터 빈틈없이 정렬">
+                            <i data-lucide="align-start-vertical"></i>
+                            <span>전체 뒤벽 일렬 정렬</span>
+                        </button>
+                        <button id="btn-space-evenly" class="quick-layout-btn" title="뒤벽에 놓인 가구를 공간 안에서 균등 배치">
+                            <i data-lucide="align-horizontal-distribute-center"></i>
+                            <span>전체 균등 간격</span>
+                        </button>
+                    </div>
+                    <p class="quick-layout-help">새 가구는 기존 가구와 겹치지 않도록 자동으로 빈자리부터 배치됩니다.</p>
+                </section>
+
                 <section class="panel-section manual-guide">
                     <h2 class="section-title">
                         <i data-lucide="help-circle"></i>
@@ -493,9 +592,7 @@
                 <span>현장 치수: <span id="print-room-dims">5000 x 4000 x 2400 mm</span></span>
             </div>
         </div>
-        <div class="print-canvas-area">
-            <img id="print-image" src="" alt="도면 이미지">
-        </div>
+        <div id="print-view-pages" class="print-view-pages"></div>
         <div class="print-footer">
             <div class="print-table-title">배치 가구 목록 명세</div>
             <table class="print-table" id="print-cabinet-table">
@@ -527,7 +624,14 @@
     <div id="preview-modal" class="modal-overlay" style="display: none;">
         <div class="modal-container">
             <div class="modal-header">
-                <h3>도면 인쇄 미리보기</h3>
+                <div>
+                    <h3>도면 인쇄 미리보기</h3>
+                    <div class="print-view-selector" aria-label="인쇄 도면 선택">
+                        <label><input type="checkbox" id="print-check-plan" checked> 2D 평면도</label>
+                        <label><input type="checkbox" id="print-check-elevation" checked> 2D 입면·제작도</label>
+                        <label><input type="checkbox" id="print-check-3d" checked> 3D 입체도</label>
+                    </div>
+                </div>
                 <div class="modal-actions">
                     <button id="btn-modal-print" class="btn-primary">
                         <i data-lucide="printer"></i> 실제 인쇄
@@ -546,9 +650,7 @@
                             <span>현장 치수: <span id="preview-room-dims">5000 x 4000 x 2400 mm</span></span>
                         </div>
                     </div>
-                    <div class="print-canvas-area">
-                        <img id="preview-image" src="" alt="도면 이미지">
-                    </div>
+                    <div id="preview-view-pages" class="preview-view-pages"></div>
                     <div class="print-footer">
                         <div class="print-table-title">배치 가구 목록 명세</div>
                         <table class="print-table" id="preview-cabinet-table">

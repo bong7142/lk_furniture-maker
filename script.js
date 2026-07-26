@@ -1,3 +1,4 @@
+// LK Furniture Maker v0.7.2 - 냉장고 설치장 + 실행취소(Ctrl+Z)
 /* SCRIPT.JS - 가구 도면 제작 및 배치 시스템 핵심 로직 */
 
 // 전역 애플리케이션 상태
@@ -52,15 +53,27 @@ const state = {
         wireframe: false,
         doorsOpen: false,
         lockRotate: false,
-        techStyle: false
-    }
+        techStyle: false,
+        raycaster: null,
+        pointer: null,
+        dragPlane: null,
+        isObjectDragging: false,
+        dragCabinetId: null,
+        dragOffsetX: 0,
+        dragOffsetZ: 0,
+        dragMoved: false
+    },
+
+    // 실행취소 기록
+    history: { undo: [], redo: [], max: 60, restoring: false }
 };
 
 // 가구 종류별 기본 스펙 정의 (Default Dimensions)
 const CAB_DEFAULTS = {
-    sink_base: { name: '싱크대 (하부장)', w: 900, d: 600, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 1, kickplate: 100, z: 0 },
+    sink_base: { name: '싱크대 (하부장)', w: 900, d: 600, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 1, kickplate: 100, z: 0, fillerSide: 'none', leftFillerWidth: 50, rightFillerWidth: 50 },
+    sink_corner: { name: '싱크대 코너장', w: 900, d: 900, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_single_left', shelves: 1, kickplate: 100, z: 0, isCorner: true, fillerSide: 'none', leftFillerWidth: 50, rightFillerWidth: 50 },
     sink_wall: { name: '싱크대 (상부장)', w: 900, d: 350, h: 700, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 2, kickplate: 0, z: 1500 },
-    fridge: { name: '냉장고장', w: 1000, d: 700, h: 2200, t: 18, color: '#3a3e45', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'none', shelves: 1, kickplate: 80, z: 0 },
+    fridge: { name: '냉장고 설치장 (상부장+EP)', w: 1000, d: 650, h: 400, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'flip_up', shelves: 0, kickplate: 0, z: 0, isFridgeInstall: true },
     island: { name: '아일랜드', w: 1200, d: 800, h: 850, t: 18, color: '#e6d9cc', groove: false, grooveDepth: 0, grooveOffset: 0, doorType: 'swing_double', shelves: 1, kickplate: 100, z: 0 },
     tall_cabinet: { name: '키큰장', w: 600, d: 600, h: 2200, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_single_left', shelves: 4, kickplate: 100, z: 0 },
     microwave_cabinet: { name: '전자렌지장', w: 600, d: 600, h: 2200, t: 18, color: '#8c6c53', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 3, kickplate: 100, z: 0, hasNiche: true, nicheType: 'microwave' },
@@ -79,6 +92,58 @@ const CAB_DEFAULTS = {
     storage_door: { name: '도어형 수납장', w: 800, d: 400, h: 1800, t: 18, color: '#e6d9cc', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 4, kickplate: 80, z: 0 },
     shelf_unit: { name: '다용도 선반장', w: 800, d: 300, h: 1200, t: 18, color: '#8c6c53', groove: false, grooveDepth: 0, grooveOffset: 0, doorType: 'none', shelves: 3, kickplate: 0, z: 0 }
 };
+
+// 실행취소 / 다시실행 -------------------------------------------------
+function makeHistorySnapshot() {
+    return JSON.stringify({ room: state.room, cabinets: state.cabinets, selectedId: state.selectedId });
+}
+function pushHistory() {
+    if (state.history.restoring) return;
+    const snap = makeHistorySnapshot();
+    if (state.history.undo[state.history.undo.length - 1] === snap) return;
+    state.history.undo.push(snap);
+    if (state.history.undo.length > state.history.max) state.history.undo.shift();
+    state.history.redo = [];
+}
+function restoreHistorySnapshot(raw) {
+    const data = JSON.parse(raw);
+    state.history.restoring = true;
+    state.room = data.room;
+    state.cabinets = data.cabinets;
+    state.cabinets.forEach(c => { migrateFridgeCabinet(c); ensureCabinetRows(c); });
+    state.selectedId = data.selectedId && state.cabinets.some(c => c.id === data.selectedId) ? data.selectedId : null;
+    document.getElementById('room-width').value = state.room.width;
+    document.getElementById('room-depth').value = state.room.depth;
+    document.getElementById('room-height').value = state.room.height;
+    selectCabinet(state.selectedId);
+    updatePlacedList(); update3DRoomGeometry(); render2D(); update3DScene();
+    state.history.restoring = false;
+}
+function undoAction() {
+    if (!state.history.undo.length) { showStatusMessage('되돌릴 작업이 없습니다.'); return; }
+    state.history.redo.push(makeHistorySnapshot());
+    restoreHistorySnapshot(state.history.undo.pop());
+    showStatusMessage('마지막 작업을 되돌렸습니다. (Ctrl+Z)');
+}
+function redoAction() {
+    if (!state.history.redo.length) { showStatusMessage('다시 실행할 작업이 없습니다.'); return; }
+    state.history.undo.push(makeHistorySnapshot());
+    restoreHistorySnapshot(state.history.redo.pop());
+    showStatusMessage('되돌린 작업을 다시 실행했습니다.');
+}
+function migrateFridgeCabinet(cab) {
+    if (!cab || cab.type !== 'fridge') return cab;
+    // 예전 한 통짜리 냉장고장을 새 설치장 규격으로 자동 변환
+    if (!cab.isFridgeInstall || Number(cab.h) > 1000) {
+        cab.name = '냉장고 설치장 (상부장+EP)';
+        cab.h = 400;
+        cab.d = Math.min(Number(cab.d) || 650, 700);
+        cab.doorType = 'flip_up';
+        cab.supportType = 'none'; cab.kickplate = 0; cab.shelves = 0;
+        cab.isFridgeInstall = true;
+    }
+    return cab;
+}
 
 // DOM 요소 캐싱
 const canvas2d = document.getElementById('canvas-2d');
@@ -103,6 +168,7 @@ function initApp() {
     addCabinet('fridge', 'kitchen', 1500, 0);
     
     selectCabinet(state.cabinets[0].id);
+    state.history.undo=[]; state.history.redo=[];
     
     updatePlacedList();
     render2D();
@@ -138,6 +204,8 @@ function resizeCanvas() {
 function setupEventListeners() {
     // 툴바 액션
     document.getElementById('btn-new').addEventListener('click', clearProject);
+    const partsRefreshBtn = document.getElementById('btn-refresh-parts');
+    if (partsRefreshBtn) partsRefreshBtn.addEventListener('click', () => { refreshPartsPanel(); showStatusMessage('선택 가구의 판재를 다시 계산했습니다.'); });
     document.getElementById('btn-save-json').addEventListener('click', saveProjectJSON);
     document.getElementById('input-load-json').addEventListener('change', loadProjectJSON);
     document.getElementById('btn-export-img').addEventListener('click', exportImage);
@@ -149,19 +217,27 @@ function setupEventListeners() {
     document.getElementById('btn-modal-close').addEventListener('click', () => {
         document.getElementById('preview-modal').style.display = 'none';
     });
+
+    ['print-check-plan', 'print-check-elevation', 'print-check-3d'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', generatePrintData);
+    });
     
     document.getElementById('btn-modal-print').addEventListener('click', () => {
+        generatePrintData();
         window.print();
     });
     
     // 현장 치수 변경
     const roomInputs = ['room-width', 'room-depth', 'room-height'];
     roomInputs.forEach(id => {
+        document.getElementById(id).addEventListener('focus', pushHistory);
         document.getElementById(id).addEventListener('input', (e) => {
             const prop = id.split('-')[1]; // width, depth, height
             state.room[prop] = Math.max(100, parseInt(e.target.value) || 0);
             update3DRoomGeometry();
             render2D();
+            update3DScene();
         });
     });
     
@@ -185,12 +261,10 @@ function setupEventListeners() {
             const type = btn.getAttribute('data-type');
             const category = btn.getAttribute('data-category');
             
-            // 룸 중앙 벽 근처에 생성
-            const defaultSpecs = CAB_DEFAULTS[type];
-            const x = Math.min(state.room.width - defaultSpecs.w, Math.floor(state.room.width / 2 - defaultSpecs.w / 2));
-            const y = 0; // 뒤벽 밀착 시작
-            
-            const newCab = addCabinet(type, category, x, y);
+            pushHistory();
+            // 기존 가구와 겹치지 않는 뒤벽 빈자리를 우선 탐색해 자동 배치
+            const autoPosition = findNextAvailablePosition(type);
+            const newCab = addCabinet(type, category, autoPosition.x, autoPosition.y);
             selectCabinet(newCab.id);
             updatePlacedList();
             render2D();
@@ -213,11 +287,15 @@ function setupEventListeners() {
         'prop-plinth-height': 'plinthHeight',
         'prop-plinth-setback': 'plinthSetback',
         'prop-leg-type': 'legType',
-        'prop-leg-height': 'legHeight'
+        'prop-leg-height': 'legHeight',
+        'prop-filler-side': 'fillerSide',
+        'prop-left-filler-width': 'leftFillerWidth',
+        'prop-right-filler-width': 'rightFillerWidth'
     };
     
     Object.keys(propFields).forEach(id => {
         const el = document.getElementById(id);
+        el.addEventListener('focus', pushHistory);
         const eventType = el.tagName === 'SELECT' || el.type === 'checkbox' ? 'change' : 'input';
         
         el.addEventListener(eventType, (e) => {
@@ -235,15 +313,21 @@ function setupEventListeners() {
             }
             
             // 지지 방식 변경 시 서브 설정 화면 갱신
+            if (key === 'fillerSide') updateSinkFillerVisibility(cab);
             if (key === 'supportType') {
                 document.getElementById('plinth-settings').style.display = cab.supportType === 'plinth' ? 'grid' : 'none';
                 document.getElementById('leg-settings').style.display = cab.supportType === 'legs' ? 'grid' : 'none';
             }
             
             // 좌표 이동 제약 조건 및 스냅
-            if (key === 'x') cab.x = Math.max(0, Math.min(state.room.width - cab.w, cab.x));
-            if (key === 'y') cab.y = Math.max(0, Math.min(state.room.depth - cab.d, cab.y));
+            if (key === 'x' || key === 'y' || key === 'rotation' || key === 'w' || key === 'd') {
+                const rotated = getCabinetRotatedDims(cab);
+                cab.x = Math.max(0, Math.min(state.room.width - rotated.w, cab.x));
+                cab.y = Math.max(0, Math.min(state.room.depth - rotated.d, cab.y));
+            }
             
+            if (['w', 'h', 't', 'd', 'doorType', 'supportType', 'plinthHeight', 'legHeight'].includes(key)) refreshInternalEditor();
+            refreshPartsPanel();
             render2D();
             update3DScene();
             updatePlacedList();
@@ -278,6 +362,7 @@ function setupEventListeners() {
     });
     
     // 우라홈 체크박스 전용
+    document.getElementById('prop-groove').addEventListener('focus', pushHistory);
     document.getElementById('prop-groove').addEventListener('change', (e) => {
         if (!state.selectedId) return;
         const cab = state.cabinets.find(c => c.id === state.selectedId);
@@ -298,6 +383,7 @@ function setupEventListeners() {
     // 속성 제어 버튼 (복제/삭제)
     document.getElementById('btn-duplicate').addEventListener('click', () => {
         if (!state.selectedId) return;
+        pushHistory();
         const cab = state.cabinets.find(c => c.id === state.selectedId);
         if (!cab) return;
         
@@ -305,7 +391,16 @@ function setupEventListeners() {
         const newX = Math.min(state.room.width - cab.w, cab.x + cab.w);
         const newY = cab.y;
         
-        const clone = { ...cab, id: 'cab_' + Date.now(), name: cab.name + ' (복사)', x: newX, y: newY };
+        const clone = JSON.parse(JSON.stringify(cab));
+        clone.id = 'cab_' + Date.now(); clone.name = cab.name + ' (복사)'; clone.x = newX; clone.y = newY;
+        ensureCabinetRows(clone).forEach((row, ri) => {
+            row.id = `row_${Date.now()}_${ri}_${Math.floor(Math.random()*1000)}`;
+            row.columns.forEach((col, ci) => {
+                col.id = `col_${Date.now()}_${ri}_${ci}_${Math.floor(Math.random()*1000)}`;
+                col.sections.forEach((sec, si) => sec.id = `sec_${Date.now()}_${ri}_${ci}_${si}_${Math.floor(Math.random()*1000)}`);
+            });
+        });
+        syncLegacySections(clone);
         state.cabinets.push(clone);
         selectCabinet(clone.id);
         
@@ -382,6 +477,133 @@ function setupEventListeners() {
         update3DScene();
     });
     
+    // 빠른 자동 배치 도구
+    document.getElementById('btn-place-right').addEventListener('click', placeSelectedToRight);
+    document.getElementById('btn-compact-back-wall').addEventListener('click', compactCabinetsAlongBackWall);
+    document.getElementById('btn-space-evenly').addEventListener('click', distributeCabinetsEvenly);
+    
+    // 내부 구성 편집기 v0.5: 가로 분할(상·하 통) + 각 가로칸별 세로 분할
+    document.getElementById('btn-add-row').addEventListener('click', () => {
+        const cab = state.cabinets.find(c => c.id === state.selectedId);
+        if (!cab) return;
+        const rows = ensureCabinetRows(cab);
+        rows.push(createCabinetRow(cab, Math.max(250, getCabinetUsableInnerHeight(cab) / (rows.length + 1))));
+        autoFitCabinetRows(cab);
+        refreshInternalEditor(); render2D(); update3DScene();
+    });
+
+    document.getElementById('btn-auto-horizontal-split').addEventListener('click', () => {
+        const cab = state.cabinets.find(c => c.id === state.selectedId);
+        if (!cab) return;
+        const currentRows = ensureCabinetRows(cab);
+        if (currentRows.length > 1 && !confirm('현재 가로 분할을 2칸으로 다시 구성할까요?')) return;
+        const usable = Math.max(500, getCabinetUsableInnerHeight(cab) - cab.t);
+        const lowerH = Math.round((usable * 0.52) / 10) * 10;
+        const upperH = usable - lowerH;
+        const baseColumns = JSON.parse(JSON.stringify(currentRows[0].columns));
+        cab.rows = [
+            createCabinetRow(cab, lowerH, baseColumns),
+            createCabinetRow(cab, upperH, [createCabinetColumn(cab, getCabinetUsableInnerWidth(cab), [createInternalSection('open', upperH)])])
+        ];
+        cab.rows.forEach(row => { autoFitRowColumns(cab, row); row.columns.forEach(col => autoFitSections(col.sections, row.height)); });
+        syncLegacySections(cab);
+        refreshInternalEditor(); render2D(); update3DScene();
+        showStatusMessage(`가구를 하부 ${lowerH}mm / 상부 ${upperH}mm로 가로 2분할했습니다.`);
+    });
+
+    document.getElementById('btn-row-auto-fit').addEventListener('click', () => {
+        const cab = state.cabinets.find(c => c.id === state.selectedId);
+        if (!cab) return;
+        autoFitCabinetRows(cab);
+        ensureCabinetRows(cab).forEach(row => {
+            autoFitRowColumns(cab, row);
+            row.columns.forEach(col => autoFitSections(col.sections, row.height));
+        });
+        syncLegacySections(cab);
+        refreshInternalEditor(); render2D(); update3DScene();
+        showStatusMessage('가로칸 높이와 각 세로칸 폭·내부 높이를 모두 맞췄습니다.');
+    });
+
+    document.getElementById('internal-row-list').addEventListener('change', (e) => {
+        const cab = state.cabinets.find(c => c.id === state.selectedId);
+        const rowCard = e.target.closest('.internal-row-card');
+        if (!cab || !rowCard) return;
+        const row = ensureCabinetRows(cab).find(r => r.id === rowCard.dataset.rowId);
+        if (!row) return;
+        if (e.target.classList.contains('row-height')) row.height = Math.max(200, parseInt(e.target.value) || 200);
+        const colCard = e.target.closest('.internal-column-card');
+        const column = colCard ? row.columns.find(c => c.id === colCard.dataset.columnId) : null;
+        if (column && e.target.classList.contains('column-width')) column.width = Math.max(150, parseInt(e.target.value) || 150);
+        const secRow = e.target.closest('.internal-section-row');
+        if (column && secRow) {
+            const section = column.sections.find(s => s.id === secRow.dataset.sectionId);
+            if (!section) return;
+            if (e.target.classList.contains('section-type')) section.type = e.target.value;
+            if (e.target.classList.contains('section-height')) section.height = Math.max(80, parseInt(e.target.value) || 80);
+            if (e.target.classList.contains('section-drawers')) section.drawers = Math.max(1, Math.min(6, parseInt(e.target.value) || 2));
+        }
+        syncLegacySections(cab);
+        refreshInternalEditor(); render2D(); update3DScene();
+    });
+
+    document.getElementById('internal-row-list').addEventListener('click', (e) => {
+        const cab = state.cabinets.find(c => c.id === state.selectedId);
+        const rowCard = e.target.closest('.internal-row-card');
+        if (!cab || !rowCard) return;
+        const rows = ensureCabinetRows(cab);
+        const rowIndex = rows.findIndex(r => r.id === rowCard.dataset.rowId);
+        if (rowIndex < 0) return;
+        const row = rows[rowIndex];
+
+        if (e.target.closest('.row-delete')) {
+            if (rows.length <= 1) { showStatusMessage('가로칸은 최소 1개가 필요합니다.'); return; }
+            rows.splice(rowIndex, 1); autoFitCabinetRows(cab);
+        } else if (e.target.closest('.row-move-up') && rowIndex < rows.length - 1) {
+            [rows[rowIndex + 1], rows[rowIndex]] = [rows[rowIndex], rows[rowIndex + 1]];
+        } else if (e.target.closest('.row-move-down') && rowIndex > 0) {
+            [rows[rowIndex - 1], rows[rowIndex]] = [rows[rowIndex], rows[rowIndex - 1]];
+        } else if (e.target.closest('.row-add-column')) {
+            row.columns.push(createCabinetColumn(cab, Math.max(200, getCabinetUsableInnerWidth(cab) / (row.columns.length + 1)), [createInternalSection('open', row.height)]));
+            autoFitRowColumns(cab, row);
+        } else if (e.target.closest('.row-column-auto-fit')) {
+            autoFitRowColumns(cab, row); row.columns.forEach(col => autoFitSections(col.sections, row.height));
+        } else {
+            const colCard = e.target.closest('.internal-column-card');
+            if (!colCard) return;
+            const colIndex = row.columns.findIndex(c => c.id === colCard.dataset.columnId);
+            if (colIndex < 0) return;
+            const column = row.columns[colIndex];
+            const addBtn = e.target.closest('.column-add-section');
+            if (addBtn) {
+                column.sections.push(createInternalSection(addBtn.dataset.sectionType));
+                autoFitSections(column.sections, row.height);
+            } else if (e.target.closest('.column-delete')) {
+                if (row.columns.length <= 1) { showStatusMessage('각 가로칸에는 최소 1개의 세로칸이 필요합니다.'); return; }
+                row.columns.splice(colIndex, 1); autoFitRowColumns(cab, row);
+            } else {
+                const secRow = e.target.closest('.internal-section-row');
+                if (!secRow) return;
+                const index = column.sections.findIndex(s => s.id === secRow.dataset.sectionId);
+                if (index < 0) return;
+                if (e.target.closest('.section-delete')) column.sections.splice(index, 1);
+                else if (e.target.closest('.section-move-up') && index > 0) [column.sections[index - 1], column.sections[index]] = [column.sections[index], column.sections[index - 1]];
+                else if (e.target.closest('.section-move-down') && index < column.sections.length - 1) [column.sections[index + 1], column.sections[index]] = [column.sections[index], column.sections[index + 1]];
+                else return;
+                if (!column.sections.length) column.sections.push(createInternalSection('open', row.height));
+                autoFitSections(column.sections, row.height);
+            }
+        }
+        syncLegacySections(cab);
+        refreshInternalEditor(); render2D(); update3DScene();
+    });
+
+    // 내부 구성 편집도 Ctrl+Z로 되돌릴 수 있도록 편집 시작 전 기록
+    const internalList = document.getElementById('internal-row-list');
+    if (internalList) {
+        internalList.addEventListener('focusin', pushHistory);
+        internalList.addEventListener('mousedown', (e) => { if (e.target.closest('button')) pushHistory(); }, true);
+    }
+
     // 2D 마우스 드래그 / 팬 제어
     canvas2d.addEventListener('mousedown', onMouseDown);
     canvas2d.addEventListener('mousemove', onMouseMove);
@@ -391,12 +613,17 @@ function setupEventListeners() {
     
     // 단축키 이벤트
     window.addEventListener('keydown', (e) => {
-        // 인풋 포커스 체크 (인풋 편집 도중 단축키 오동작 방지)
-        const activeEl = document.activeElement;
-        if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT')) {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+            e.preventDefault();
+            if (e.shiftKey) redoAction(); else undoAction();
             return;
         }
-        
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+            e.preventDefault(); redoAction(); return;
+        }
+        // 인풋 포커스 체크 (인풋 편집 도중 단축키 오동작 방지)
+        const activeEl = document.activeElement;
+        if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT')) return;
         if (!state.selectedId) return;
         const cab = state.cabinets.find(c => c.id === state.selectedId);
         if (!cab) return;
@@ -408,6 +635,7 @@ function setupEventListeners() {
                 break;
             case 'r':
             case 'R':
+                pushHistory();
                 // 90도씩 회전
                 cab.rotation = (cab.rotation + 90) % 360;
                 document.getElementById('prop-rotation').value = cab.rotation.toString();
@@ -422,18 +650,21 @@ function setupEventListeners() {
                 }
                 break;
             case 'ArrowLeft':
+                pushHistory();
                 cab.x = Math.max(0, cab.x - (e.shiftKey ? 100 : 10));
                 syncPropFields(cab);
                 render2D();
                 update3DScene();
                 break;
             case 'ArrowRight':
+                pushHistory();
                 cab.x = Math.min(state.room.width - cab.w, cab.x + (e.shiftKey ? 100 : 10));
                 syncPropFields(cab);
                 render2D();
                 update3DScene();
                 break;
             case 'ArrowUp':
+                pushHistory();
                 if (state.currentTab === 'plan') {
                     cab.y = Math.max(0, cab.y - (e.shiftKey ? 100 : 10));
                 } else if (state.currentTab === 'elevation') {
@@ -444,6 +675,7 @@ function setupEventListeners() {
                 update3DScene();
                 break;
             case 'ArrowDown':
+                pushHistory();
                 if (state.currentTab === 'plan') {
                     cab.y = Math.min(state.room.depth - cab.d, cab.y + (e.shiftKey ? 100 : 10));
                 } else if (state.currentTab === 'elevation') {
@@ -483,7 +715,175 @@ function switchTab(tab, tabElement) {
     }
 }
 
-// 가구 데이터 생성
+// 가구가 차지하는 평면 사각형 반환
+function getCabinetBounds(cab, x = cab.x, y = cab.y) {
+    const dims = getCabinetRotatedDims(cab);
+    return { left: x, top: y, right: x + dims.w, bottom: y + dims.d, w: dims.w, d: dims.d };
+}
+
+// 두 가구의 평면 영역 겹침 여부
+function rectanglesOverlap(a, b, clearance = 0) {
+    return !(a.right + clearance <= b.left ||
+             a.left >= b.right + clearance ||
+             a.bottom + clearance <= b.top ||
+             a.top >= b.bottom + clearance);
+}
+
+// 라이브러리에서 새 가구를 추가할 때 사용할 빈 위치 탐색
+function findNextAvailablePosition(type) {
+    const specs = CAB_DEFAULTS[type];
+    const temp = { w: specs.w, d: specs.d, rotation: 0 };
+    const dims = getCabinetRotatedDims(temp);
+    const step = 50;
+
+    // 1차: 뒤벽(y=0)을 왼쪽부터 검색
+    for (let x = 0; x <= state.room.width - dims.w; x += step) {
+        const candidate = { left: x, top: 0, right: x + dims.w, bottom: dims.d };
+        const occupied = state.cabinets.some(other => rectanglesOverlap(candidate, getCabinetBounds(other), 0));
+        if (!occupied) return { x, y: 0 };
+    }
+
+    // 2차: 방 전체를 그리드 방식으로 검색
+    for (let y = step; y <= state.room.depth - dims.d; y += step) {
+        for (let x = 0; x <= state.room.width - dims.w; x += step) {
+            const candidate = { left: x, top: y, right: x + dims.w, bottom: y + dims.d };
+            const occupied = state.cabinets.some(other => rectanglesOverlap(candidate, getCabinetBounds(other), 0));
+            if (!occupied) return { x, y };
+        }
+    }
+
+    // 빈 공간이 없으면 안전하게 방 안 중앙에 배치
+    return {
+        x: Math.max(0, Math.min(state.room.width - dims.w, Math.floor((state.room.width - dims.w) / 2))),
+        y: Math.max(0, Math.min(state.room.depth - dims.d, Math.floor((state.room.depth - dims.d) / 2)))
+    };
+}
+
+function refreshAfterAutoLayout(message) {
+    if (state.selectedId) {
+        const cab = state.cabinets.find(c => c.id === state.selectedId);
+        if (cab) syncPropFields(cab);
+    }
+    updatePlacedList();
+    render2D();
+    update3DScene();
+    showStatusMessage(message);
+}
+
+// 선택 가구를 같은 뒤벽 라인의 가장 오른쪽에 연속 배치
+function placeSelectedToRight() {
+    const cab = state.cabinets.find(c => c.id === state.selectedId);
+    if (!cab) {
+        showStatusMessage('먼저 이동할 가구를 선택하세요.');
+        return;
+    }
+
+    const others = state.cabinets.filter(c => c.id !== cab.id);
+    let targetX = 0;
+    others.forEach(other => {
+        const bounds = getCabinetBounds(other);
+        targetX = Math.max(targetX, bounds.right);
+    });
+
+    const dims = getCabinetRotatedDims(cab);
+    if (targetX + dims.w > state.room.width) {
+        showStatusMessage('오른쪽에 배치할 공간이 부족합니다.');
+        return;
+    }
+
+    cab.x = Math.round(targetX / 10) * 10;
+    cab.y = 0;
+    refreshAfterAutoLayout(`${cab.name}을(를) 오른쪽 빈자리에 배치했습니다.`);
+}
+
+// 모든 가구를 뒤벽 기준 왼쪽부터 빈틈없이 정렬
+function compactCabinetsAlongBackWall() {
+    if (state.cabinets.length === 0) {
+        showStatusMessage('정렬할 가구가 없습니다.');
+        return;
+    }
+
+    const ordered = [...state.cabinets].sort((a, b) => a.x - b.x || a.y - b.y);
+    const totalWidth = ordered.reduce((sum, cab) => sum + getCabinetRotatedDims(cab).w, 0);
+    if (totalWidth > state.room.width) {
+        showStatusMessage(`가구 총 폭 ${Math.round(totalWidth)}mm가 현장 폭을 초과합니다.`);
+        return;
+    }
+
+    let cursorX = 0;
+    ordered.forEach(cab => {
+        cab.x = cursorX;
+        cab.y = 0;
+        cursorX += getCabinetRotatedDims(cab).w;
+    });
+
+    refreshAfterAutoLayout('모든 가구를 뒤벽에 빈틈없이 정렬했습니다.');
+}
+
+// 모든 가구를 뒤벽에 균등 간격으로 배치
+function distributeCabinetsEvenly() {
+    if (state.cabinets.length === 0) {
+        showStatusMessage('배치할 가구가 없습니다.');
+        return;
+    }
+
+    const ordered = [...state.cabinets].sort((a, b) => a.x - b.x || a.y - b.y);
+    const totalWidth = ordered.reduce((sum, cab) => sum + getCabinetRotatedDims(cab).w, 0);
+    const remaining = state.room.width - totalWidth;
+    if (remaining < 0) {
+        showStatusMessage(`가구 총 폭 ${Math.round(totalWidth)}mm가 현장 폭을 초과합니다.`);
+        return;
+    }
+
+    const gap = remaining / (ordered.length + 1);
+    let cursorX = gap;
+    ordered.forEach(cab => {
+        cab.x = Math.round(cursorX);
+        cab.y = 0;
+        cursorX += getCabinetRotatedDims(cab).w + gap;
+    });
+
+    refreshAfterAutoLayout(`가구 사이를 약 ${Math.round(gap)}mm 간격으로 균등 배치했습니다.`);
+}
+
+// 내부 구성 데이터 기본값 및 마이그레이션 v0.5
+function createInternalSection(type = 'open', height = null) {
+    return { id: `sec_${Date.now()}_${Math.floor(Math.random()*100000)}`, type,
+        height: height || (type === 'drawer' ? 360 : type === 'hanger' ? 900 : type === 'umbrella' ? 700 : 300), drawers: 2, label: '' };
+}
+function createDefaultSections(specs) {
+    const count=Math.max(0,Number(specs.shelves)||0), usable=Math.max(300,specs.h-(specs.kickplate||0)-specs.t*2), zones=count+1, zoneH=Math.floor(usable/zones);
+    return Array.from({length:zones},(_,i)=>({...createInternalSection(i===0&&specs.h>=1700?'hanger':'shelf',zoneH),id:`sec_${Date.now()}_${i}_${Math.floor(Math.random()*1000)}`}));
+}
+function createCabinetColumn(cab,width=null,sections=null){return{id:`col_${Date.now()}_${Math.floor(Math.random()*100000)}`,width:Math.max(150,Number(width)||getCabinetUsableInnerWidth(cab)),sections:Array.isArray(sections)&&sections.length?sections:[createInternalSection('open',getCabinetUsableInnerHeight(cab))]};}
+function createCabinetRow(cab,height=null,columns=null){const h=Math.max(200,Number(height)||getCabinetUsableInnerHeight(cab));return{id:`row_${Date.now()}_${Math.floor(Math.random()*100000)}`,height:h,columns:Array.isArray(columns)&&columns.length?columns:[createCabinetColumn(cab,getCabinetUsableInnerWidth(cab),[createInternalSection('open',h)])]};}
+function getCabinetSupportHeight(cab){if(cab.supportType==='legs')return Number(cab.legHeight)||0;if(cab.supportType==='plinth')return Number(cab.plinthHeight)||0;return 0;}
+function getCabinetUsableInnerHeight(cab){return Math.max(0,cab.h-getCabinetSupportHeight(cab)-cab.t*2);}
+function getCabinetUsableInnerWidth(cab){return Math.max(0,cab.w-cab.t*2);}
+function normalizeSection(section,index=0){if(!section.id)section.id=`sec_${Date.now()}_${index}_${Math.floor(Math.random()*1000)}`;if(!['shelf','hanger','drawer','open','umbrella'].includes(section.type))section.type='open';section.height=Math.max(80,Number(section.height)||300);section.drawers=Math.max(1,Math.min(6,Number(section.drawers)||2));return section;}
+function normalizeColumn(cab,column,index=0,rowHeight=null){if(!column.id)column.id=`col_${Date.now()}_${index}_${Math.floor(Math.random()*1000)}`;column.width=Math.max(150,Number(column.width)||getCabinetUsableInnerWidth(cab));if(!Array.isArray(column.sections)||!column.sections.length)column.sections=[createInternalSection('open',rowHeight||getCabinetUsableInnerHeight(cab))];column.sections.forEach(normalizeSection);return column;}
+function ensureCabinetRows(cab){
+    if(!Array.isArray(cab.rows)||!cab.rows.length){
+        let legacyCols=Array.isArray(cab.columns)&&cab.columns.length?cab.columns:null;
+        if(!legacyCols){const legacySections=Array.isArray(cab.sections)&&cab.sections.length?cab.sections:createDefaultSections({h:cab.h,t:cab.t,kickplate:cab.kickplate||0,shelves:cab.shelves||0});legacyCols=[createCabinetColumn(cab,getCabinetUsableInnerWidth(cab),legacySections)];}
+        cab.rows=[createCabinetRow(cab,getCabinetUsableInnerHeight(cab),legacyCols)];
+    }
+    cab.rows.forEach((row,ri)=>{if(!row.id)row.id=`row_${Date.now()}_${ri}_${Math.floor(Math.random()*1000)}`;row.height=Math.max(200,Number(row.height)||getCabinetUsableInnerHeight(cab)/cab.rows.length);if(!Array.isArray(row.columns)||!row.columns.length)row.columns=[createCabinetColumn(cab,getCabinetUsableInnerWidth(cab),[createInternalSection('open',row.height)])];row.columns.forEach((c,ci)=>normalizeColumn(cab,c,ci,row.height));});
+    syncLegacySections(cab);return cab.rows;
+}
+function ensureCabinetColumns(cab){return ensureCabinetRows(cab)[0].columns;}
+function syncLegacySections(cab){if(Array.isArray(cab.rows)&&cab.rows[0]){cab.columns=cab.rows[0].columns;if(cab.columns[0])cab.sections=cab.columns[0].sections;}}
+function ensureCabinetSections(cab){return ensureCabinetColumns(cab)[0].sections;}
+function getSectionTypeName(type){return({shelf:'선반칸',hanger:'옷봉칸',drawer:'서랍칸',open:'오픈칸',umbrella:'우산꽂이함'})[type]||'내부칸';}
+function autoFitSections(sections,usable){if(!sections.length)return;const min=80,current=sections.reduce((s,x)=>s+Number(x.height||0),0)||1;let assigned=0;sections.forEach((sec,i)=>{if(i===sections.length-1)sec.height=Math.max(min,Math.round(usable-assigned));else{sec.height=Math.max(min,Math.round((sec.height/current)*usable/10)*10);assigned+=sec.height;}});}
+function autoFitRowColumns(cab,row){const cols=row.columns,usable=getCabinetUsableInnerWidth(cab)-cab.t*Math.max(0,cols.length-1),current=cols.reduce((s,c)=>s+Number(c.width||0),0)||1;let assigned=0;cols.forEach((c,i)=>{if(i===cols.length-1)c.width=Math.max(150,Math.round(usable-assigned));else{c.width=Math.max(150,Math.round((c.width/current)*usable/10)*10);assigned+=c.width;}});}
+function autoFitCabinetColumns(cab){ensureCabinetRows(cab).forEach(r=>autoFitRowColumns(cab,r));syncLegacySections(cab);}
+function autoFitCabinetSections(cab){ensureCabinetRows(cab).forEach(r=>r.columns.forEach(c=>autoFitSections(c.sections,r.height)));syncLegacySections(cab);}
+function autoFitCabinetRows(cab){const rows=ensureCabinetRows(cab),usable=getCabinetUsableInnerHeight(cab)-cab.t*Math.max(0,rows.length-1),current=rows.reduce((s,r)=>s+Number(r.height||0),0)||1;let assigned=0;rows.forEach((r,i)=>{if(i===rows.length-1)r.height=Math.max(200,Math.round(usable-assigned));else{r.height=Math.max(200,Math.round((r.height/current)*usable/10)*10);assigned+=r.height;}});}
+function renderSectionRows(column){return column.sections.map((section,index)=>`<div class="internal-section-row" data-section-id="${section.id}"><div class="section-order">${index+1}</div><select class="section-type"><option value="shelf" ${section.type==='shelf'?'selected':''}>선반칸</option><option value="hanger" ${section.type==='hanger'?'selected':''}>옷봉칸</option><option value="drawer" ${section.type==='drawer'?'selected':''}>서랍칸</option><option value="open" ${section.type==='open'?'selected':''}>오픈칸</option><option value="umbrella" ${section.type==='umbrella'?'selected':''}>우산꽂이함</option></select><label class="section-height-wrap"><input class="section-height" type="number" min="80" step="10" value="${Math.round(section.height)}"><span>mm</span></label>${section.type==='drawer'?`<label class="drawer-count-wrap"><input class="section-drawers" type="number" min="1" max="6" value="${section.drawers}"><span>단</span></label>`:'<span class="drawer-count-placeholder"></span>'}<div class="section-row-actions"><button type="button" class="section-move-up">▲</button><button type="button" class="section-move-down">▼</button><button type="button" class="section-delete">×</button></div></div>`).join('');}
+function renderColumnCard(row,column,colIndex){const usedH=Math.round(column.sections.reduce((s,x)=>s+Number(x.height||0),0)),remainH=Math.round(row.height-usedH);return `<div class="internal-column-card" data-column-id="${column.id}"><div class="internal-column-header"><div class="column-order">${colIndex+1}</div><div class="column-title">${colIndex+1}번 세로칸</div><label class="column-width-wrap"><input class="column-width" type="number" min="150" step="10" value="${Math.round(column.width)}"><span>mm</span></label><button type="button" class="column-delete">×</button></div><div class="column-section-toolbar"><button type="button" class="column-add-section" data-section-type="shelf">+ 선반</button><button type="button" class="column-add-section" data-section-type="hanger">+ 옷봉</button><button type="button" class="column-add-section" data-section-type="drawer">+ 서랍</button><button type="button" class="column-add-section" data-section-type="open">+ 오픈</button><button type="button" class="column-add-section" data-section-type="umbrella">+ 우산함</button></div><div class="column-section-list">${renderSectionRows(column)}</div><div class="column-summary"><span>사용높이 ${usedH}mm</span><span class="${remainH===0?'ok':'error'}">${remainH===0?'높이 일치':`차이 ${remainH}mm`}</span></div></div>`;}
+function refreshInternalEditor(){const list=document.getElementById('internal-row-list');if(!list)return;const cab=state.cabinets.find(c=>c.id===state.selectedId);if(!cab){list.innerHTML='<div class="internal-empty">가구를 선택하면 내부 구성을 편집할 수 있습니다.</div>';return;}if(cab.type==='fridge'){list.innerHTML='<div class="internal-empty">냉장고 설치장은 상부장 크기만 설정합니다. 하부는 냉장고 빈 공간이며 좌·우 EP가 자동 생성됩니다.</div>';return;}const rows=ensureCabinetRows(cab),totalH=Math.round(getCabinetUsableInnerHeight(cab)),dividerH=cab.t*Math.max(0,rows.length-1),usedH=Math.round(rows.reduce((s,r)=>s+Number(r.height||0),0)+dividerH);list.innerHTML=rows.slice().reverse().map((row,revIndex)=>{const actualIndex=rows.length-1-revIndex;const divT=cab.t*Math.max(0,row.columns.length-1),usedW=Math.round(row.columns.reduce((s,c)=>s+Number(c.width||0),0)+divT),remainW=Math.round(getCabinetUsableInnerWidth(cab)-usedW);return `<div class="internal-row-card" data-row-id="${row.id}"><div class="internal-row-header"><div><strong>${actualIndex+1}번 가로칸 ${actualIndex===0?'(하부)':''}</strong><span>상·하 별도 제작 통</span></div><label class="row-height-wrap"><input class="row-height" type="number" min="200" step="10" value="${Math.round(row.height)}"><span>mm</span></label><div class="row-actions"><button type="button" class="row-move-up" title="위로">▲</button><button type="button" class="row-move-down" title="아래로">▼</button><button type="button" class="row-delete">×</button></div></div><div class="row-column-toolbar"><button type="button" class="row-add-column">+ 세로칸 추가</button><button type="button" class="row-column-auto-fit">세로폭 자동 맞춤</button><span>폭 차이 ${remainW}mm</span></div><div class="internal-column-list">${row.columns.map((c,i)=>renderColumnCard(row,c,i)).join('')}</div></div>`;}).join('');document.getElementById('internal-total-height').textContent=totalH;document.getElementById('internal-used-height').textContent=usedH;const remain=totalH-usedH,w=document.getElementById('internal-height-warning');w.textContent=remain===0?`가로 ${rows.length}칸 높이와 중간판 두께가 정확히 맞습니다.`:remain>0?`${remain}mm가 남습니다. 자동 맞춤을 눌러주세요.`:`${Math.abs(remain)}mm가 초과되었습니다.`;w.className=`internal-height-warning ${remain===0?'ok':remain<0?'error':'notice'}`;lucide.createIcons();}
+
 function addCabinet(type, category, x, y) {
     const specs = CAB_DEFAULTS[type];
     const newCab = {
@@ -502,6 +902,9 @@ function addCabinet(type, category, x, y) {
         doorType: specs.doorType,
         handleType: specs.handleType || 'none',
         shelves: specs.shelves,
+        sections: createDefaultSections(specs),
+        columns: [],
+        rows: [],
         kickplate: specs.kickplate,
         supportType: specs.supportType || (specs.kickplate > 0 ? 'plinth' : 'none'),
         plinthHeight: specs.plinthHeight || specs.kickplate || 100,
@@ -511,9 +914,16 @@ function addCabinet(type, category, x, y) {
         x: x,
         y: y,
         z: specs.z,
-        rotation: 0
+        rotation: 0,
+        isCorner: !!specs.isCorner,
+        fillerSide: specs.fillerSide || 'none',
+        leftFillerWidth: specs.leftFillerWidth || 50,
+        rightFillerWidth: specs.rightFillerWidth || 50,
+        isFridgeInstall: !!specs.isFridgeInstall
     };
+    migrateFridgeCabinet(newCab);
     
+    newCab.columns = [createCabinetColumn(newCab, getCabinetUsableInnerWidth(newCab), newCab.sections)];
     state.cabinets.push(newCab);
     return newCab;
 }
@@ -528,6 +938,7 @@ function selectCabinet(id) {
     if (id) {
         const cab = state.cabinets.find(c => c.id === id);
         if (cab) {
+            migrateFridgeCabinet(cab);
             propsPanel.style.display = 'block';
             noSelectionPrompt.style.display = 'none';
             
@@ -546,6 +957,16 @@ function selectCabinet(id) {
 }
 
 function syncPropFields(cab) {
+    migrateFridgeCabinet(cab);
+    const fridgeMode = cab.type === 'fridge';
+    const labelW = document.querySelector('label[for="prop-w"]');
+    const labelD = document.querySelector('label[for="prop-d"]');
+    const labelH = document.querySelector('label[for="prop-h"]');
+    if (labelW) labelW.innerHTML = `${fridgeMode ? '상부장 가로 (W)' : '가로 (W)'} <span class="unit">mm</span>`;
+    if (labelD) labelD.innerHTML = `${fridgeMode ? '상부장 깊이 (D)' : '깊이 (D)'} <span class="unit">mm</span>`;
+    if (labelH) labelH.innerHTML = `${fridgeMode ? '상부장 높이 (H)' : '높이 (H)'} <span class="unit">mm</span>`;
+    const doorSelect = document.getElementById('prop-door-type');
+    if (doorSelect) doorSelect.disabled = fridgeMode;
     document.getElementById('prop-w').value = cab.w;
     document.getElementById('prop-d').value = cab.d;
     document.getElementById('prop-h').value = cab.h;
@@ -583,6 +1004,13 @@ function syncPropFields(cab) {
     document.getElementById('prop-pos-x').value = Math.round(cab.x);
     document.getElementById('prop-pos-y').value = Math.round(cab.y);
     document.getElementById('prop-rotation').value = cab.rotation.toString();
+    cab.fillerSide = cab.fillerSide || 'none';
+    cab.leftFillerWidth = Number(cab.leftFillerWidth) || 50;
+    cab.rightFillerWidth = Number(cab.rightFillerWidth) || 50;
+    document.getElementById('prop-filler-side').value = cab.fillerSide;
+    document.getElementById('prop-left-filler-width').value = cab.leftFillerWidth;
+    document.getElementById('prop-right-filler-width').value = cab.rightFillerWidth;
+    updateSinkFillerVisibility(cab);
     
     // 우라홈 및 하부 지지대 서브패널 동적 노출 제어
     const grooveSettings = document.getElementById('groove-settings');
@@ -592,10 +1020,26 @@ function syncPropFields(cab) {
     const legSettings = document.getElementById('leg-settings');
     plinthSettings.style.display = cab.supportType === 'plinth' ? 'grid' : 'none';
     legSettings.style.display = cab.supportType === 'legs' ? 'grid' : 'none';
+    refreshInternalEditor();
+    refreshPartsPanel();
+}
+
+function updateSinkFillerVisibility(cab){
+    const wrap=document.getElementById('sink-filler-settings');
+    if(!wrap) return;
+    const isSinkBase = !!cab && (cab.type==='sink_base' || cab.type==='sink_corner');
+    wrap.style.display = isSinkBase ? 'block' : 'none';
+    if(!isSinkBase) return;
+    const side=cab.fillerSide||'none';
+    const lg=document.getElementById('left-filler-size-group');
+    const rg=document.getElementById('right-filler-size-group');
+    if(lg) lg.style.display=(side==='left'||side==='both')?'flex':'none';
+    if(rg) rg.style.display=(side==='right'||side==='both')?'flex':'none';
 }
 
 function deleteSelectedCabinet() {
     if (!state.selectedId) return;
+    pushHistory();
     const index = state.cabinets.findIndex(c => c.id === state.selectedId);
     if (index !== -1) {
         const deleted = state.cabinets.splice(index, 1)[0];
@@ -611,20 +1055,24 @@ function deleteSelectedCabinet() {
 function getC2DTheme() {
     const isPrint = state.isExporting;
     return {
-        bg: isPrint ? '#ffffff' : '#0b0f19',
-        gridMain: isPrint ? '#cbd5e1' : '#334155',
-        gridSub: isPrint ? '#f1f5f9' : '#1a2236',
-        wallFill: isPrint ? '#f8fafc' : 'rgba(30, 41, 59, 0.2)',
-        wallBorder: isPrint ? '#475569' : '#64748b',
-        dimension: isPrint ? '#334155' : '#94a3b8',
-        cabFill: isPrint ? '#ffffff' : '#1e293b',
-        cabBorder: isPrint ? '#000000' : '#475569',
-        cabSelectedBorder: isPrint ? '#000000' : '#818cf8',
-        cabT: isPrint ? '#dc2626' : '#ef4444',
-        cabGroove: isPrint ? '#d97706' : '#f59e0b',
-        cabShelf: isPrint ? '#059669' : '#10b981',
-        textPrimary: isPrint ? '#000000' : '#f8fafc',
-        textSecondary: isPrint ? '#334155' : '#94a3b8'
+        bg: isPrint ? '#ffffff' : '#111827',
+        gridMain: isPrint ? '#cbd5e1' : '#374151',
+        gridSub: isPrint ? '#eef2f7' : '#1f2937',
+        wallFill: isPrint ? '#fbfdff' : 'rgba(255,255,255,0.025)',
+        wallBorder: isPrint ? '#334155' : '#64748b',
+        dimension: isPrint ? '#1e3a5f' : '#93c5fd',
+        cabFill: isPrint ? '#ffffff' : '#f8fafc',
+        cabBorder: isPrint ? '#111827' : '#0f172a',
+        cabSelectedBorder: isPrint ? '#1d4ed8' : '#60a5fa',
+        cabT: isPrint ? '#b91c1c' : '#f87171',
+        cabGroove: isPrint ? '#b45309' : '#fbbf24',
+        cabShelf: isPrint ? '#047857' : '#34d399',
+        boardFill: isPrint ? '#e2e8f0' : '#cbd5e1',
+        boardEdge: isPrint ? '#334155' : '#475569',
+        doorFill: isPrint ? '#f8fafc' : '#e5e7eb',
+        openingFill: isPrint ? '#ffffff' : '#111827',
+        textPrimary: isPrint ? '#0f172a' : '#f8fafc',
+        textSecondary: isPrint ? '#334155' : '#cbd5e1'
     };
 }
 
@@ -803,8 +1251,47 @@ function drawDimensionLine(x1, y1, x2, y2, position, text) {
     ctx2d.restore();
 }
 
+// 전문 도면 스타일 보조: 판재 해칭
+function drawBoardHatch(x, y, w, h, theme) {
+    ctx2d.save();
+    ctx2d.beginPath();
+    ctx2d.rect(x, y, w, h);
+    ctx2d.clip();
+    ctx2d.strokeStyle = state.isExporting ? 'rgba(71,85,105,.28)' : 'rgba(71,85,105,.42)';
+    ctx2d.lineWidth = 0.7;
+    const span = Math.abs(w) + Math.abs(h) + 40;
+    for (let i = -span; i < span * 2; i += 14) {
+        ctx2d.beginPath();
+        ctx2d.moveTo(x + i, y + h);
+        ctx2d.lineTo(x + i + h, y);
+        ctx2d.stroke();
+    }
+    ctx2d.restore();
+}
+
+// 전문 도면 스타일 보조: 여닫이 문 열림 궤적
+function drawDoorSwingPlan(x, y, width, side, theme) {
+    const r = Math.max(20, Math.min(width, 420));
+    ctx2d.save();
+    ctx2d.strokeStyle = theme.dimension;
+    ctx2d.lineWidth = 1.2;
+    ctx2d.setLineDash([8, 6]);
+    ctx2d.beginPath();
+    if (side === 'left') {
+        ctx2d.moveTo(x, y); ctx2d.lineTo(x, y + r);
+        ctx2d.arc(x, y, r, 0, Math.PI / 2, false);
+    } else {
+        ctx2d.moveTo(x, y); ctx2d.lineTo(x, y + r);
+        ctx2d.arc(x, y, r, Math.PI, Math.PI / 2, true);
+    }
+    ctx2d.stroke();
+    ctx2d.setLineDash([]);
+    ctx2d.restore();
+}
+
 // 2D 평면도 개별 가구 그리기
 function drawCabinetPlan(cab, isSelected) {
+    if (cab.type === 'fridge') return drawFridgePlan(cab, isSelected);
     const theme = getC2DTheme();
     // 회전 정보 고려한 경계 크기 구하기
     const rotated = getCabinetRotatedDims(cab);
@@ -820,19 +1307,40 @@ function drawCabinetPlan(cab, isSelected) {
     const halfW = localW / 2;
     const halfD = localD / 2;
     
-    // 기본 채우기
-    ctx2d.fillStyle = isSelected ? (state.isExporting ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.25)') : theme.cabFill;
-    ctx2d.fillRect(-halfW, -halfD, localW, localD);
-    
-    // 뼈대 테두리
+    // 기본 몸통: 일반장은 직사각형, 코너장은 ㄱ자 형상
+    const selectedFill = state.isExporting ? 'rgba(37,99,235,.10)' : 'rgba(96,165,250,.18)';
+    ctx2d.fillStyle = isSelected ? selectedFill : theme.cabFill;
     ctx2d.strokeStyle = isSelected ? theme.cabSelectedBorder : theme.cabBorder;
-    ctx2d.lineWidth = isSelected ? 3 : 1.5;
-    ctx2d.strokeRect(-halfW, -halfD, localW, localD);
-    
-    // 목재 두께(T) 내부선 그리기
-    ctx2d.strokeStyle = isSelected ? (state.isExporting ? 'rgba(0, 0, 0, 0.15)' : 'rgba(129, 140, 248, 0.4)') : theme.gridMain;
-    ctx2d.lineWidth = 1;
-    ctx2d.strokeRect(-halfW + cab.t, -halfD + cab.t, localW - cab.t*2, localD - cab.t*2);
+    ctx2d.lineWidth = isSelected ? 3 : 1.8;
+    if (cab.isCorner || cab.type === 'sink_corner') {
+        const wing = Math.max(cab.t * 3, Math.min(localW, localD) * 0.42);
+        ctx2d.beginPath();
+        ctx2d.moveTo(-halfW, -halfD);
+        ctx2d.lineTo(halfW, -halfD);
+        ctx2d.lineTo(halfW, -halfD + wing);
+        ctx2d.lineTo(-halfW + wing, -halfD + wing);
+        ctx2d.lineTo(-halfW + wing, halfD);
+        ctx2d.lineTo(-halfW, halfD);
+        ctx2d.closePath();
+        ctx2d.fill(); ctx2d.stroke();
+        drawBoardHatch(-halfW, -halfD, localW, cab.t, theme);
+        drawBoardHatch(-halfW, -halfD, cab.t, localD, theme);
+        ctx2d.strokeStyle = theme.dimension;
+        ctx2d.setLineDash([8,6]);
+        ctx2d.beginPath();
+        ctx2d.moveTo(-halfW + wing, -halfD + wing);
+        ctx2d.lineTo(halfW, halfD);
+        ctx2d.stroke();
+        ctx2d.setLineDash([]);
+    } else {
+        ctx2d.fillRect(-halfW, -halfD, localW, localD);
+        ctx2d.strokeRect(-halfW, -halfD, localW, localD);
+        ctx2d.strokeStyle = theme.boardEdge;
+        ctx2d.lineWidth = 1;
+        ctx2d.strokeRect(-halfW + cab.t, -halfD + cab.t, localW - cab.t*2, localD - cab.t*2);
+        drawBoardHatch(-halfW, -halfD, cab.t, localD, theme);
+        drawBoardHatch(halfW-cab.t, -halfD, cab.t, localD, theme);
+    }
     
     // 우라홈(뒷판 홈) 위치 표시 (배면 뒷판)
     // 회전각도 상, 기본 배치(0도)시 뒤쪽 벽면이 위(-D/2)임
@@ -854,6 +1362,19 @@ function drawCabinetPlan(cab, isSelected) {
     ctx2d.lineTo(halfW, halfD);
     ctx2d.stroke();
     
+    // 문 열림 방향 및 코너장 전면 표시
+    if (!(cab.isCorner || cab.type === 'sink_corner')) {
+        const frontY = halfD;
+        if (cab.doorType === 'swing_double') {
+            drawDoorSwingPlan(-halfW, frontY, localW/2, 'left', theme);
+            drawDoorSwingPlan(halfW, frontY, localW/2, 'right', theme);
+        } else if (cab.doorType === 'swing_single_left') {
+            drawDoorSwingPlan(-halfW, frontY, localW, 'left', theme);
+        } else if (cab.doorType === 'swing_single_right') {
+            drawDoorSwingPlan(halfW, frontY, localW, 'right', theme);
+        }
+    }
+
     // 가구 중심 축 십자 표시
     ctx2d.strokeStyle = theme.gridMain;
     ctx2d.lineWidth = 0.5;
@@ -902,9 +1423,51 @@ function drawCabinetPlan(cab, isSelected) {
     ctx2d.restore();
 }
 
+function drawFridgePlan(cab, isSelected) {
+    const theme=getC2DTheme(), W=cab.w, D=cab.d, T=cab.t;
+    const rotated=getCabinetRotatedDims(cab);
+    ctx2d.save();
+    ctx2d.translate(cab.x+rotated.w/2,cab.y+rotated.d/2); ctx2d.rotate((cab.rotation||0)*Math.PI/180);
+    // 상부장은 천장 설치이므로 평면도에서 점선, EP는 실선으로 표시
+    ctx2d.fillStyle=isSelected?'rgba(99,102,241,.22)':theme.wallFill;
+    ctx2d.strokeStyle=isSelected?theme.cabSelectedBorder:theme.cabBorder; ctx2d.lineWidth=isSelected?3:1.5;
+    ctx2d.setLineDash([18,10]); ctx2d.fillRect(-W/2,-D/2,W,D); ctx2d.strokeRect(-W/2,-D/2,W,D); ctx2d.setLineDash([]);
+    ctx2d.fillStyle=theme.boardFill;
+    ctx2d.fillRect(-W/2,-D/2,T,D); ctx2d.fillRect(W/2-T,-D/2,T,D);
+    ctx2d.strokeRect(-W/2,-D/2,T,D); ctx2d.strokeRect(W/2-T,-D/2,T,D);
+    ctx2d.fillStyle=theme.dimension; ctx2d.font='bold 12px sans-serif'; ctx2d.textAlign='center';
+    ctx2d.fillText('냉장고 빈 공간',0,5); ctx2d.font='11px sans-serif'; ctx2d.fillText('상부장(천장 설치) · 좌/우 EP',0,22);
+    ctx2d.restore();
+}
+
+function drawFridgeElevation(cab, isSelected) {
+    const theme=getC2DTheme(), W=cab.w, H=cab.h, T=cab.t;
+    const top=state.room.height, upperBottom=top-H, x=cab.x;
+    ctx2d.save();
+    // 냉장고 빈 공간
+    ctx2d.fillStyle=theme.openingFill; ctx2d.fillRect(x,-upperBottom,W, -upperBottom);
+    // 좌우 EP (바닥~천장)
+    ctx2d.fillStyle=theme.boardFill; ctx2d.fillRect(x,-top,T,top); ctx2d.fillRect(x+W-T,-top,T,top);
+    ctx2d.strokeStyle=isSelected?theme.cabSelectedBorder:theme.cabBorder; ctx2d.lineWidth=isSelected?3:1.5;
+    ctx2d.strokeRect(x,-top,T,top); ctx2d.strokeRect(x+W-T,-top,T,top);
+    // 상부장 몸통
+    ctx2d.fillStyle=theme.cabFill; ctx2d.fillRect(x,-top,W,H); ctx2d.strokeRect(x,-top,W,H);
+    ctx2d.fillStyle=theme.boardFill;
+    ctx2d.fillRect(x,-top,W,T); ctx2d.fillRect(x,-upperBottom-T,W,T);
+    ctx2d.fillRect(x,-top,T,H); ctx2d.fillRect(x+W-T,-top,T,H);
+    // 플립 도어 + 위로 열림 표시
+    ctx2d.fillStyle=theme.doorFill; ctx2d.fillRect(x+2,-top+2,W-4,H-4); ctx2d.strokeRect(x+2,-top+2,W-4,H-4);
+    ctx2d.beginPath(); ctx2d.moveTo(x+W/2,-upperBottom-20); ctx2d.lineTo(x+W/2,-top+20); ctx2d.lineTo(x+W/2-9,-top+34); ctx2d.moveTo(x+W/2,-top+20); ctx2d.lineTo(x+W/2+9,-top+34); ctx2d.stroke();
+    ctx2d.fillStyle=theme.dimension; ctx2d.font='bold 12px sans-serif'; ctx2d.textAlign='center';
+    ctx2d.fillText(`플립 상부장 ${W}×${cab.d}×${H}`,x+W/2,-top+H/2);
+    ctx2d.font='12px sans-serif'; ctx2d.fillText('냉장고 설치 공간',x+W/2,-upperBottom/2);
+    ctx2d.restore();
+}
+
 // 2D 정면 입면도 개별 가구 그리기
 // 정면 입면도는 룸 X축(가로)과 Z축(높이 - 화면상 y축 방향 역방향)을 사용
 function drawCabinetElevation(cab, isSelected) {
+    if (cab.type === 'fridge') return drawFridgeElevation(cab, isSelected);
     const theme = getC2DTheme();
     // 입면 뷰 상에서의 실제 가로/세로 영역 매핑
     // 회전에 따라 너비와 깊이가 보이는 모습이 달라짐
@@ -972,6 +1535,19 @@ function drawCabinetElevation(cab, isSelected) {
         const bodyTop = drawY - drawH;
         const bodyBottom = drawY - supportH;
         const t = cab.t;
+
+        // 판재 기반 골조 표현: 좌판/우판/상판/밑판을 실제 두께로 채움
+        ctx2d.fillStyle = theme.boardFill;
+        ctx2d.fillRect(drawX, bodyTop, t, bodyBottom - bodyTop);
+        ctx2d.fillRect(drawX + visualW - t, bodyTop, t, bodyBottom - bodyTop);
+        ctx2d.fillRect(drawX, bodyTop, visualW, t);
+        ctx2d.fillRect(drawX, bodyBottom - t, visualW, t);
+        drawBoardHatch(drawX, bodyTop, t, bodyBottom-bodyTop, theme);
+        drawBoardHatch(drawX + visualW - t, bodyTop, t, bodyBottom-bodyTop, theme);
+        ctx2d.strokeStyle = theme.boardEdge;
+        ctx2d.lineWidth = 1.1;
+        ctx2d.strokeRect(drawX, bodyTop, visualW, bodyBottom-bodyTop);
+        ctx2d.strokeRect(drawX + t, bodyTop + t, visualW - t*2, bodyBottom - bodyTop - t*2);
         
         ctx2d.strokeStyle = theme.gridMain;
         ctx2d.lineWidth = 1;
@@ -1004,7 +1580,7 @@ function drawCabinetElevation(cab, isSelected) {
             
             if (cab.doorType === 'swing_double') {
                 // 좌우 분할 도어 그리기
-                ctx2d.fillStyle = theme.cabFill;
+                ctx2d.fillStyle = theme.doorFill;
                 ctx2d.fillRect(drawX + 2, doorTop, visualW/2 - 3, doorH);
                 ctx2d.strokeRect(drawX + 2, doorTop, visualW/2 - 3, doorH);
                 
@@ -1022,7 +1598,7 @@ function drawCabinetElevation(cab, isSelected) {
                 drawHandle(drawX + visualW/2 - 15, doorTop + doorH/2, 'left', theme, cab.handleType);
                 drawHandle(drawX + visualW/2 + 15, doorTop + doorH/2, 'right', theme, cab.handleType);
             } else if (cab.doorType === 'swing_single_left') {
-                ctx2d.fillStyle = theme.cabFill;
+                ctx2d.fillStyle = theme.doorFill;
                 ctx2d.fillRect(drawX + 2, doorTop, visualW - 4, doorH);
                 ctx2d.strokeRect(drawX + 2, doorTop, visualW - 4, doorH);
                 
@@ -1042,7 +1618,7 @@ function drawCabinetElevation(cab, isSelected) {
                 ctx2d.lineTo(drawX + visualW, doorBottom);
                 ctx2d.stroke();
             } else if (cab.doorType === 'swing_single_right') {
-                ctx2d.fillStyle = theme.cabFill;
+                ctx2d.fillStyle = theme.doorFill;
                 ctx2d.fillRect(drawX + 2, doorTop, visualW - 4, doorH);
                 ctx2d.strokeRect(drawX + 2, doorTop, visualW - 4, doorH);
                 
@@ -1081,7 +1657,7 @@ function drawCabinetElevation(cab, isSelected) {
                 }
                 
                 const yFront = yChan + channelH;
-                ctx2d.fillStyle = theme.cabFill;
+                ctx2d.fillStyle = theme.doorFill;
                 ctx2d.fillRect(drawX + 2, yFront, visualW - 4, drawerH);
                 ctx2d.strokeRect(drawX + 2, yFront, visualW - 4, drawerH);
                 
@@ -1096,21 +1672,28 @@ function drawCabinetElevation(cab, isSelected) {
             }
         }
         
-        // 내부 선반 점선 그리기 (도어가 닫혀있어도 투시선으로 보여줌)
-        if (cab.shelves > 0) {
-            ctx2d.strokeStyle = theme.cabShelf; // 선반 녹색 점선 표현
-            ctx2d.setLineDash([4, 4]);
-            const shelfStep = cabinetInnerH / (cab.shelves + 1);
-            for (let i = 1; i <= cab.shelves; i++) {
-                const shelfY = bodyTop + t + shelfStep * i;
-                ctx2d.beginPath();
-                ctx2d.moveTo(drawX + t, shelfY);
-                ctx2d.lineTo(drawX + visualW - t, shelfY);
-                ctx2d.stroke();
-            }
-            ctx2d.setLineDash([]); // 원복
-        }
-        
+        // 내부 구성 v0.5: 가로 분할 통 + 각 통의 세로 분할
+        const rows2D = ensureCabinetRows(cab);
+        const innerVisualW = visualW - t * 2;
+        const totalRowH = rows2D.reduce((sum,row)=>sum+Number(row.height||0),0)||1;
+        const availableRowVisualH = Math.max(0,cabinetInnerH-t*Math.max(0,rows2D.length-1));
+        let rowBottom2D = bodyBottom - t;
+        ctx2d.save(); ctx2d.textAlign='center';
+        rows2D.forEach((row,rowIndex)=>{
+            const rowVisualH=availableRowVisualH*(row.height/totalRowH), rowTop2D=rowBottom2D-rowVisualH;
+            if(rowIndex>0){ctx2d.fillStyle=theme.cabFill;ctx2d.fillRect(drawX+t,rowBottom2D,innerVisualW,Math.max(2,t));ctx2d.strokeStyle=theme.cabBorder;ctx2d.strokeRect(drawX+t,rowBottom2D,innerVisualW,Math.max(2,t));}
+            const columns=row.columns,totalColumnW=columns.reduce((s,c)=>s+Number(c.width||0),0)||1,availableColW=Math.max(0,innerVisualW-t*Math.max(0,columns.length-1));let colX=drawX+t;
+            columns.forEach((column,colIndex)=>{
+                const colW=availableColW*(column.width/totalColumnW);
+                if(colIndex>0){ctx2d.fillStyle=theme.cabFill;ctx2d.fillRect(colX-t,rowTop2D,t,rowVisualH);ctx2d.strokeStyle=theme.cabBorder;ctx2d.strokeRect(colX-t,rowTop2D,t,rowVisualH);}
+                const secTotal=column.sections.reduce((s,x)=>s+Number(x.height||0),0)||1;let secBottom=rowBottom2D;
+                column.sections.forEach((section,index)=>{const sh=rowVisualH*(section.height/secTotal),st=secBottom-sh;ctx2d.strokeStyle=theme.cabShelf;ctx2d.setLineDash([5,4]);if(index<column.sections.length-1){ctx2d.beginPath();ctx2d.moveTo(colX,st);ctx2d.lineTo(colX+colW,st);ctx2d.stroke();}ctx2d.setLineDash([]);ctx2d.fillStyle=theme.textSecondary;ctx2d.font='bold 9px Noto Sans KR, sans-serif';ctx2d.fillText(`${getSectionTypeName(section.type)} ${Math.round(section.height)}mm`,colX+colW/2,st+sh/2+3,Math.max(35,colW-6));if(section.type==='hanger'){ctx2d.strokeStyle=theme.dimension;ctx2d.lineWidth=3;const ry=st+Math.min(70,sh*.22);ctx2d.beginPath();ctx2d.moveTo(colX+15,ry);ctx2d.lineTo(colX+colW-15,ry);ctx2d.stroke();}else if(section.type==='drawer'){ctx2d.strokeStyle=theme.cabBorder;ctx2d.lineWidth=1;for(let d=1;d<(section.drawers||2);d++){const dy=st+sh*d/(section.drawers||2);ctx2d.beginPath();ctx2d.moveTo(colX+4,dy);ctx2d.lineTo(colX+colW-4,dy);ctx2d.stroke();}}else if(section.type==='umbrella'){ctx2d.strokeStyle=theme.dimension;ctx2d.strokeRect(colX+10,secBottom-Math.min(80,sh*.45)-15,Math.max(20,colW-20),Math.min(80,sh*.45));}secBottom=st;});
+                ctx2d.fillStyle=theme.textPrimary;ctx2d.font='bold 8px monospace';ctx2d.fillText(`${Math.round(column.width)}mm`,colX+colW/2,rowTop2D+10,Math.max(30,colW-4));colX+=colW+t;
+            });
+            ctx2d.fillStyle=theme.dimension;ctx2d.font='bold 9px monospace';ctx2d.textAlign='left';ctx2d.fillText(`가로통 H:${Math.round(row.height)}`,drawX+t+4,rowTop2D+22);ctx2d.textAlign='center';rowBottom2D=rowTop2D-t;
+        });
+        ctx2d.restore();
+
         // --------------------------------------------------
         // 상세 부재 치수 노출 (골조 두께, 칸막이 높이, 도어/서랍별 상세 크기)
         // --------------------------------------------------
@@ -1145,18 +1728,15 @@ function drawCabinetElevation(cab, isSelected) {
                 }
             }
             
-            // 2. 내부 선반 높이 간격 기입
-            if (cab.shelves > 0) {
-                ctx2d.fillStyle = theme.cabShelf; // Green for shelf heights
-                ctx2d.font = 'bold 12px monospace';
-                const shelfStep = cabinetInnerH / (cab.shelves + 1);
-                const shelfSpaceH = Math.round(shelfStep - t);
-                for (let i = 0; i <= cab.shelves; i++) {
-                    const textY = bodyTop + t + shelfStep * i + shelfStep / 2 + 3;
-                    ctx2d.fillText(`칸:${shelfSpaceH}`, drawX + 30, textY);
-                }
-            }
-            
+            // 2. 가로/세로 분할 치수 기입
+            const detailRows = ensureCabinetRows(cab);
+            ctx2d.fillStyle = theme.cabShelf;
+            ctx2d.font = 'bold 9px monospace';
+            ctx2d.textAlign = 'center';
+            detailRows.forEach((row, ri) => {
+                ctx2d.fillText(`통${ri + 1}:H${Math.round(row.height)}`, drawX + visualW / 2, bodyTop + 14 + ri * 11);
+            });
+
             // 3. 목재 두께(T) 기입
             ctx2d.fillStyle = theme.cabT; // Red for thickness
             ctx2d.font = 'bold 12px monospace';
@@ -1187,6 +1767,9 @@ function drawCabinetElevation(cab, isSelected) {
         ctx2d.stroke();
     }
     
+    // 업로드 예시처럼 정면도에 얕은 깊이감을 추가
+    if (facesFront) drawElevationDepthEffect(drawX, drawY, visualW, drawH, cab.d, theme);
+
     // 텍스트 라벨 (가구명 및 높이/폭 수치)
     ctx2d.fillStyle = theme.textPrimary;
     ctx2d.font = 'bold 14px Inter, sans-serif';
@@ -1196,7 +1779,64 @@ function drawCabinetElevation(cab, isSelected) {
     ctx2d.fillStyle = theme.textSecondary;
     ctx2d.font = 'bold 11px monospace';
     ctx2d.fillText(`W:${cab.w} H:${cab.h}`, drawX + visualW/2, drawY - drawH/2 + 12);
+
+    // 개별 가구 외곽 치수선
+    if (state.detailsEnabled || isSelected) {
+        drawDimensionLine(drawX, drawY + 42, drawX + visualW, drawY + 42, 'bottom', `${Math.round(visualW)} mm`);
+        drawDimensionLine(drawX - 42, drawY, drawX - 42, drawY - drawH, 'left', `${Math.round(drawH)} mm`);
+    }
     
+    ctx2d.restore();
+}
+
+// 2D 입면도에 약한 사시도 깊이선을 추가하여 공장 제작도처럼 보이게 함
+function drawElevationDepthEffect(x, y, w, h, depth, theme) {
+    const maxOffset = Math.max(14, Math.min(95, Number(depth || 0) * 0.12));
+    const dx = maxOffset;
+    const dy = -maxOffset * 0.48;
+    ctx2d.save();
+    ctx2d.strokeStyle = theme.boardEdge;
+    ctx2d.fillStyle = state.isExporting ? 'rgba(226,232,240,0.42)' : 'rgba(148,163,184,0.14)';
+    ctx2d.lineWidth = state.isExporting ? 1.15 : 1;
+
+    // 상판 사시면
+    ctx2d.beginPath();
+    ctx2d.moveTo(x, y - h);
+    ctx2d.lineTo(x + dx, y - h + dy);
+    ctx2d.lineTo(x + w + dx, y - h + dy);
+    ctx2d.lineTo(x + w, y - h);
+    ctx2d.closePath();
+    ctx2d.fill();
+    ctx2d.stroke();
+
+    // 우측판 사시면
+    ctx2d.beginPath();
+    ctx2d.moveTo(x + w, y - h);
+    ctx2d.lineTo(x + w + dx, y - h + dy);
+    ctx2d.lineTo(x + w + dx, y + dy);
+    ctx2d.lineTo(x + w, y);
+    ctx2d.closePath();
+    ctx2d.fill();
+    ctx2d.stroke();
+
+    // 깊이 치수 보조선
+    if (state.detailsEnabled || state.isExporting) {
+        ctx2d.strokeStyle = theme.dimension;
+        ctx2d.fillStyle = theme.dimension;
+        ctx2d.setLineDash([5, 4]);
+        ctx2d.beginPath();
+        ctx2d.moveTo(x + w + 8, y - h - 8);
+        ctx2d.lineTo(x + w + dx + 8, y - h + dy - 8);
+        ctx2d.stroke();
+        ctx2d.setLineDash([]);
+        ctx2d.save();
+        ctx2d.translate(x + w + dx / 2 + 13, y - h + dy / 2 - 12);
+        ctx2d.rotate(Math.atan2(dy, dx));
+        ctx2d.font = 'bold 10px monospace';
+        ctx2d.textAlign = 'center';
+        ctx2d.fillText(`${Math.round(depth)} mm`, 0, 0);
+        ctx2d.restore();
+    }
     ctx2d.restore();
 }
 
@@ -1283,6 +1923,7 @@ function onMouseDown(e) {
         const hitCab = findCabinetAt(worldCoords.x, worldCoords.y);
         
         if (hitCab) {
+            pushHistory();
             selectCabinet(hitCab.id);
             state.isDragging = true;
             state.dragStartMouseX = worldCoords.x;
@@ -1629,6 +2270,7 @@ function updatePlacedList() {
                 view.panY = canvas2d.height/2 - (cab.y + cab.d/2) * view.zoom;
             }
             render2D();
+            update3DScene();
         });
         
         // 리스트 내 개별 삭제 아이콘
@@ -1675,6 +2317,9 @@ function init3D() {
     state.three.controls.maxPolarAngle = Math.PI / 2 - 0.05; // 바닥 밑으로 카메라 못 내려가게
     state.three.controls.minDistance = 200;
     state.three.controls.maxDistance = 15000;
+
+    // 3D 선택 및 바닥면 드래그 이동 준비
+    setup3DInteraction();
     
     // 사용자가 직접 회전 드래그 시 프리셋 버튼 활성 해제
     state.three.controls.addEventListener('start', () => {
@@ -1718,6 +2363,131 @@ function init3D() {
         state.three.renderer.render(state.three.scene, state.three.camera);
     }
     animate();
+}
+
+// 3D에서 가구 선택 및 X/Y 평면 이동
+function setup3DInteraction() {
+    const renderer = state.three.renderer;
+    const camera = state.three.camera;
+    if (!renderer || !camera) return;
+
+    state.three.raycaster = new THREE.Raycaster();
+    state.three.pointer = new THREE.Vector2();
+    state.three.dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const dom = renderer.domElement;
+
+    function updatePointer(e) {
+        const rect = dom.getBoundingClientRect();
+        state.three.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        state.three.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        state.three.raycaster.setFromCamera(state.three.pointer, camera);
+    }
+
+    function getHitCabinetRoot(e) {
+        updatePointer(e);
+        const group = state.three.cabinetsGroup;
+        if (!group) return null;
+        const hits = state.three.raycaster.intersectObjects(group.children, true);
+        if (!hits.length) return null;
+        const id = hits[0].object.userData && hits[0].object.userData.cabinetId;
+        if (!id) return null;
+        return group.children.find(child => child.userData.cabinetId === id) || null;
+    }
+
+    function planePoint(e, height = 0) {
+        updatePointer(e);
+        state.three.dragPlane.set(new THREE.Vector3(0, 1, 0), -height);
+        const point = new THREE.Vector3();
+        return state.three.raycaster.ray.intersectPlane(state.three.dragPlane, point) ? point : null;
+    }
+
+    dom.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        const hitRoot = getHitCabinetRoot(e);
+        if (!hitRoot) return; // 빈 공간은 OrbitControls가 회전 담당
+
+        e.preventDefault();
+        e.stopPropagation();
+        const id = hitRoot.userData.cabinetId;
+        const cab = state.cabinets.find(c => c.id === id);
+        if (!cab) return;
+        pushHistory();
+
+        // 3D와 2D/속성 패널의 선택 상태 공유
+        selectCabinet(id);
+        update3DScene();
+        const freshRoot = state.three.cabinetsGroup.children.find(c => c.userData.cabinetId === id);
+        const point = planePoint(e, Number(cab.z || 0));
+        if (!freshRoot || !point) return;
+
+        state.three.isObjectDragging = true;
+        state.three.dragCabinetId = id;
+        state.three.dragOffsetX = freshRoot.position.x - point.x;
+        state.three.dragOffsetZ = freshRoot.position.z - point.z;
+        state.three.dragMoved = false;
+        state.three.controls.enabled = false;
+        dom.style.cursor = 'grabbing';
+        try { dom.setPointerCapture(e.pointerId); } catch (_) {}
+    }, true);
+
+    dom.addEventListener('pointermove', (e) => {
+        if (!state.three.isObjectDragging || !state.three.dragCabinetId) {
+            const hit = getHitCabinetRoot(e);
+            dom.style.cursor = hit ? 'move' : 'grab';
+            return;
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+        const cab = state.cabinets.find(c => c.id === state.three.dragCabinetId);
+        const root = state.three.cabinetsGroup.children.find(c => c.userData.cabinetId === state.three.dragCabinetId);
+        const point = cab ? planePoint(e, Number(cab.z || 0)) : null;
+        if (!cab || !root || !point) return;
+
+        const rotated = getCabinetRotatedDims(cab);
+        let centerX2D = point.x + state.three.dragOffsetX + state.room.width / 2;
+        let centerY2D = point.z + state.three.dragOffsetZ + state.room.depth / 2;
+        let targetX = centerX2D - rotated.w / 2;
+        let targetY = centerY2D - rotated.d / 2;
+
+        if (state.snapEnabled) {
+            targetX = Math.round(targetX / 50) * 50;
+            targetY = Math.round(targetY / 50) * 50;
+        }
+        targetX = Math.max(0, Math.min(state.room.width - rotated.w, targetX));
+        targetY = Math.max(0, Math.min(state.room.depth - rotated.d, targetY));
+
+        cab.x = targetX;
+        cab.y = targetY;
+        root.position.x = -state.room.width / 2 + targetX + rotated.w / 2;
+        root.position.z = -state.room.depth / 2 + targetY + rotated.d / 2;
+        state.three.dragMoved = true;
+
+        syncPropFields(cab);
+        render2D();
+        updatePlacedList();
+        showStatusMessage(`3D 이동: ${cab.name}  X ${Math.round(cab.x)} / Y ${Math.round(cab.y)} mm`);
+    }, true);
+
+    function finish3DDrag(e) {
+        if (!state.three.isObjectDragging) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const id = state.three.dragCabinetId;
+        const cab = state.cabinets.find(c => c.id === id);
+        state.three.isObjectDragging = false;
+        state.three.dragCabinetId = null;
+        state.three.controls.enabled = true;
+        dom.style.cursor = 'grab';
+        try { dom.releasePointerCapture(e.pointerId); } catch (_) {}
+        update3DScene();
+        render2D();
+        if (cab) showStatusMessage(`${cab.name} 위치가 2D·3D에 동기화되었습니다.`);
+    }
+
+    dom.addEventListener('pointerup', finish3DDrag, true);
+    dom.addEventListener('pointercancel', finish3DDrag, true);
+    dom.addEventListener('contextmenu', e => e.preventDefault());
 }
 
 // 방 외곽 테두리 및 벽면 3D 시각화
@@ -1830,8 +2600,43 @@ function update3DScene() {
     });
 }
 
+function createFridgeInstallation3D(cab) {
+    migrateFridgeCabinet(cab);
+    const group=new THREE.Group(); group.name=cab.id;
+    const W=cab.w,D=cab.d,H=cab.h,T=cab.t,totalH=state.room.height,upperY=totalH-H;
+    const mat=state.three.techStyle?new THREE.MeshBasicMaterial({color:0xffffff,wireframe:state.three.wireframe}):new THREE.MeshStandardMaterial({color:new THREE.Color(cab.color),roughness:.7,metalness:.05,wireframe:state.three.wireframe});
+    const doorMat=state.three.techStyle?new THREE.MeshBasicMaterial({color:0xffffff}):new THREE.MeshStandardMaterial({color:new THREE.Color(cab.color),roughness:.55});
+    const add=(geo,x,y,z,m=mat)=>{const mesh=new THREE.Mesh(geo,m);mesh.position.set(x,y,z);mesh.castShadow=true;mesh.receiveShadow=true;group.add(mesh);return mesh;};
+    // 좌·우 EP: 바닥에서 천장까지
+    const leftEP=add(new THREE.BoxGeometry(T,totalH,D),T/2,totalH/2,0);
+    add(new THREE.BoxGeometry(T,totalH,D),W-T/2,totalH/2,0);
+    // 상부장 몸통
+    add(new THREE.BoxGeometry(W-2*T,T,D),W/2,upperY+T/2,0);
+    add(new THREE.BoxGeometry(W-2*T,T,D),W/2,totalH-T/2,0);
+    add(new THREE.BoxGeometry(T,H,D),T/2,upperY+H/2,0);
+    add(new THREE.BoxGeometry(T,H,D),W-T/2,upperY+H/2,0);
+    add(new THREE.BoxGeometry(W-2*T,H-2*T,3),W/2,upperY+H/2,-D/2+2);
+    // 플립업 도어
+    const doorT=18, doorGroup=new THREE.Group();
+    doorGroup.position.set(W/2,totalH-T,D/2+doorT/2);
+    const door= new THREE.Mesh(new THREE.BoxGeometry(W-4,H-4,doorT),doorMat);
+    door.position.set(0,-(H-4)/2,0); door.castShadow=true; doorGroup.add(door);
+    if(state.three.doorsOpen) doorGroup.rotation.x=-Math.PI/2.5;
+    group.add(doorGroup);
+    if(cab.id===state.selectedId) group.add(new THREE.BoxHelper(leftEP,0x818cf8));
+    const rotated=getCabinetRotatedDims(cab),rad=-(Number(cab.rotation||0)*Math.PI)/180;
+    [...group.children].forEach(ch=>{ch.position.x-=W/2;ch.position.z-=D/2;});
+    group.rotation.y=rad;
+    group.position.set(-state.room.width/2+cab.x+rotated.w/2,0,-state.room.depth/2+cab.y+rotated.d/2);
+    group.userData.cabinetId=cab.id; group.traverse(o=>o.userData.cabinetId=cab.id);
+    const outlineColor=(state.three.techStyle||state.isExporting)?0x000000:0x475569;
+    group.traverse(child=>{if(child.isMesh&&child.geometry){const edges=new THREE.EdgesGeometry(child.geometry);child.add(new THREE.LineSegments(edges,new THREE.LineBasicMaterial({color:outlineColor})));}});
+    return group;
+}
+
 // 핵심 함수: 가구 규격(T, 우라홈 등) 물리적 보드를 반영한 캐비닛 조립 메쉬 생성
 function createCabinet3DMesh(cab) {
+    if (cab.type === 'fridge') return createFridgeInstallation3D(cab);
     const cabGroup = new THREE.Group();
     cabGroup.name = cab.id;
     
@@ -2011,24 +2816,15 @@ function createCabinet3DMesh(cab) {
         cabGroup.add(backboard);
     }
     
-    // 7. 선반 (Internal Shelves)
-    if (cab.shelves > 0) {
-        const shelfD = bottomD - 10; // 앞단 10mm 여유
-        const shelfW = W - T*2 - 2; // 좌우 1mm씩 조립 여유
-        const shelfH = T;
-        const innerH = H - kick - T*2 - 20; // 상하단 여유
-        const shelfStep = innerH / (cab.shelves + 1);
-        
-        for (let i = 1; i <= cab.shelves; i++) {
-            const shelf = new THREE.Mesh(new THREE.BoxGeometry(shelfW, shelfH, shelfD), woodMat);
-            // Z 위치는 밑판과 동일하게 앞정렬
-            shelf.position.set(W/2, kick + T + shelfStep * i, bottomZ + 5);
-            shelf.castShadow = true;
-            shelf.receiveShadow = true;
-            cabGroup.add(shelf);
-        }
-    }
-    
+    // 7. 내부 구성 v0.5 (가로 분할 통 + 통별 세로 분할)
+    const rows3D=ensureCabinetRows(cab),innerBottomY=kick+T,innerTopY=H-T,usableInnerH=Math.max(0,innerTopY-innerBottomY),totalRowsH=rows3D.reduce((s,r)=>s+Number(r.height||0),0)||1,availableRowsH=Math.max(0,usableInnerH-T*Math.max(0,rows3D.length-1));let rowCursorY=innerBottomY;
+    rows3D.forEach((row,rowIndex)=>{
+        const rowH3D=availableRowsH*(row.height/totalRowsH);
+        if(rowIndex>0){const horizontalPanel=new THREE.Mesh(new THREE.BoxGeometry(W-T*2,T,Math.max(40,bottomD)),woodMat);horizontalPanel.position.set(W/2,rowCursorY+T/2,bottomZ);horizontalPanel.castShadow=true;horizontalPanel.receiveShadow=true;cabGroup.add(horizontalPanel);rowCursorY+=T;}
+        const columns=row.columns,totalColW=columns.reduce((s,c)=>s+Number(c.width||0),0)||1,availableColW=Math.max(0,W-T*2-T*Math.max(0,columns.length-1));let colCursor=T;
+        columns.forEach((column,colIndex)=>{const colW=availableColW*(column.width/totalColW);if(colIndex>0){const partition=new THREE.Mesh(new THREE.BoxGeometry(T,rowH3D,Math.max(40,bottomD)),woodMat);partition.position.set(colCursor-T/2,rowCursorY+rowH3D/2,bottomZ);partition.castShadow=true;cabGroup.add(partition);}const secTotal=column.sections.reduce((s,x)=>s+Number(x.height||0),0)||1;let sy=rowCursorY;column.sections.forEach((section,index)=>{const sh=rowH3D*(section.height/secTotal),top=sy+sh;if(index<column.sections.length-1){const shelf=new THREE.Mesh(new THREE.BoxGeometry(Math.max(20,colW),T,Math.max(40,bottomD-20)),woodMat);shelf.position.set(colCursor+colW/2,top-T/2,bottomZ+10);shelf.castShadow=true;cabGroup.add(shelf);}if(section.type==='hanger'){const rod=new THREE.Mesh(new THREE.CylinderGeometry(10,10,Math.max(40,colW-60),16),metalMat);rod.rotation.z=Math.PI/2;rod.position.set(colCursor+colW/2,top-Math.min(120,sh*.2),D/2-70);cabGroup.add(rod);}else if(section.type==='drawer'){const count=Math.max(1,Math.min(6,Number(section.drawers)||2)),dh=sh/count;for(let di=0;di<count;di++){const front=new THREE.Mesh(new THREE.BoxGeometry(Math.max(20,colW-8),Math.max(30,dh-5),18),woodMat);front.position.set(colCursor+colW/2,sy+dh*di+dh/2,D/2+9);front.castShadow=true;cabGroup.add(front);}}else if(section.type==='umbrella'){const th=Math.min(120,sh*.25),tray=new THREE.Mesh(new THREE.BoxGeometry(Math.max(30,colW-30),th,Math.max(80,D-120)),woodMat);tray.position.set(colCursor+colW/2,sy+th/2,D/2-70);cabGroup.add(tray);}sy=top;});colCursor+=colW+T;});rowCursorY+=rowH3D;
+    });
+
     // 8. 밥통장/전자렌지장 특수 틈새 니치 및 악세서리 구현 (WOW 포인트)
     if (cab.hasNiche) {
         // 키큰장의 허리높이(약 800~1400)에 오픈 공간 생성
@@ -2320,55 +3116,33 @@ function createCabinet3DMesh(cab) {
         cabGroup.add(boxHelper);
     }
     
-    // 12. 전체 가구를 2D 배치도(Plan)의 좌표 및 회전 연동
-    // 2D의 좌표 origin은 룸 왼쪽위(X=0, Y=0), 3D의 origin은 방 정중앙(0,0,0)
-    // 2D X -> 3D X: -roomWidth/2 + cab.x
-    // 2D Y -> 3D Z: -roomDepth/2 + cab.y
-    // 가구 중심축 회전 맞춤 변환
+    // 12. 2D/3D 공통 좌표계 적용
+    // cab.x, cab.y는 회전된 가구 경계박스의 좌측 상단 좌표이다.
+    // 3D 그룹의 원점은 가구 중심이므로, 회전된 경계박스 중심을 그대로 사용한다.
     const roomW = state.room.width;
     const roomD = state.room.depth;
-    
-    // 회전 고려한 3D 정렬 보정
     const rotated = getCabinetRotatedDims(cab);
-    const rad = -(cab.rotation * Math.PI) / 180; // 방향 매핑 보정
-    
-    cabGroup.rotation.y = rad;
-    
-    // 회전된 피벗 중심 좌표 보정 계산
-    const posX = -roomW/2 + cab.x;
-    const posZ = -roomD/2 + cab.y;
-    
-    // Three.js 가구 pivot은 (0,0)이 좌하단 뒤가 아닌 가구 Group의 (0,0,0)이므로 보드 로컬 좌표계 오프셋 보정 필요
-    // 기본적으로 로컬 배치 시 X축 0~W, Z축 0~D로 그렸음
-    // 가구 기준점을 좌하단 구석으로 삼기 위해 Three.js 로컬 보드 그룹을 이동
-    const children = [...cabGroup.children];
-    children.forEach(child => {
-        child.position.x -= W/2;
-        child.position.z -= D/2;
+    const rad = -(Number(cab.rotation || 0) * Math.PI) / 180;
+
+    // 0~W / 0~D로 제작된 모든 최상위 부재를 가구 중심 기준으로 이동
+    [...cabGroup.children].forEach(child => {
+        child.position.x -= W / 2;
+        child.position.z -= D / 2;
     });
-    
-    // 최종 위치 지정
-    cabGroup.position.set(posX + W/2, cab.z, posZ + D/2);
-    
-    // 회전 중심도 좌하단 구석 기준으로 수식 보정 처리
-    cabGroup.position.x = posX + W/2;
-    cabGroup.position.y = cab.z;
-    cabGroup.position.z = posZ + D/2;
-    
-    // 로컬 오프셋 가구 구석 기준점 회전 변환 적용
-    const pivotOffsetX = -W/2;
-    const pivotOffsetZ = -D/2;
-    
-    // 회전 변환
-    const cosR = Math.cos(rad);
-    const sinR = Math.sin(rad);
-    
-    // 구석 배치 기준 Three.js 위치 세팅
-    const finalX = posX - (pivotOffsetX * cosR - pivotOffsetZ * sinR);
-    const finalZ = posZ - (pivotOffsetX * sinR + pivotOffsetZ * cosR);
-    
-    cabGroup.position.set(finalX, cab.z, finalZ);
-    
+
+    cabGroup.rotation.y = rad;
+    const centerX2D = Number(cab.x || 0) + rotated.w / 2;
+    const centerY2D = Number(cab.y || 0) + rotated.d / 2;
+    cabGroup.position.set(
+        -roomW / 2 + centerX2D,
+        Number(cab.z || 0),
+        -roomD / 2 + centerY2D
+    );
+
+    // Raycaster가 어느 가구인지 즉시 찾을 수 있도록 루트와 모든 하위 객체에 ID 저장
+    cabGroup.userData.cabinetId = cab.id;
+    cabGroup.traverse(obj => { obj.userData.cabinetId = cab.id; });
+
     // 13. 모든 구성판재(Mesh)에 대해 외곽 실선(Edges) 테두리 생성 (도면 스타일화)
     const outlineColor = (state.three.techStyle || state.isExporting) ? 0x000000 : 0x475569;
     cabGroup.traverse(child => {
@@ -2393,6 +3167,7 @@ function createCabinet3DMesh(cab) {
 // 새 설계 초기화
 function clearProject() {
     if (confirm('현재 설계중인 모든 내용이 삭제되고 초기화됩니다. 계속하시겠습니까?')) {
+        pushHistory();
         state.cabinets = [];
         state.selectedId = null;
         
@@ -2453,8 +3228,10 @@ function loadProjectJSON(e) {
         try {
             const data = JSON.parse(evt.target.result);
             if (data.room && Array.isArray(data.cabinets)) {
+                pushHistory();
                 state.room = data.room;
                 state.cabinets = data.cabinets;
+                state.cabinets.forEach(c => { migrateFridgeCabinet(c); ensureCabinetRows(c); });
                 state.selectedId = null;
                 
                 // UI 갱신
@@ -2522,52 +3299,84 @@ function exportImage() {
 }
 
 // 도면 데이터 생성 및 미리보기 영역 동기화
+function getSelectedPrintViews() {
+    const selected = [];
+    const plan = document.getElementById('print-check-plan');
+    const elevation = document.getElementById('print-check-elevation');
+    const three = document.getElementById('print-check-3d');
+    if (!plan || plan.checked) selected.push('plan');
+    if (!elevation || elevation.checked) selected.push('elevation');
+    if (!three || three.checked) selected.push('3d');
+    return selected;
+}
+
+function capturePrintView(type) {
+    const previousTab = state.currentTab;
+    const previousSelected = state.selectedId;
+    const previousExporting = state.isExporting;
+    const savedPlan = { ...state.plan };
+    const savedElevation = { ...state.elevation };
+    let url = '';
+    try {
+        state.selectedId = null;
+        state.isExporting = true;
+        if (type === 'plan' || type === 'elevation') {
+            state.currentTab = type;
+            zoomToFit();
+            render2D();
+            url = canvas2d.toDataURL('image/png');
+        } else {
+            state.currentTab = '3d';
+            update3DScene();
+            state.three.renderer.render(state.three.scene, state.three.camera);
+            url = state.three.renderer.domElement.toDataURL('image/png');
+        }
+    } finally {
+        state.currentTab = previousTab;
+        state.selectedId = previousSelected;
+        state.isExporting = previousExporting;
+        Object.assign(state.plan, savedPlan);
+        Object.assign(state.elevation, savedElevation);
+        if (previousTab === 'plan' || previousTab === 'elevation') render2D();
+        else update3DScene();
+    }
+    return url;
+}
+
+function printViewTitle(type) {
+    if (type === 'plan') return '2D 평면도 (TOP VIEW)';
+    if (type === 'elevation') return '2D 입면·제작도 (ELEVATION / SHOP DRAWING)';
+    return '3D 입체도 (3D VIEW)';
+}
+
+// 도면 데이터 생성 및 선택한 도면 미리보기/인쇄 영역 동기화
 function generatePrintData() {
     const now = new Date();
     const dateStr = `${now.getFullYear()}. ${String(now.getMonth() + 1).padStart(2, '0')}. ${String(now.getDate()).padStart(2, '0')}`;
     const dimsStr = `${state.room.width} x ${state.room.depth} x ${state.room.height} mm`;
-    
-    // 1. 날짜 및 치수 기입 (실제 인쇄용 + 화면 미리보기용 둘 다)
     document.getElementById('print-date').innerText = dateStr;
     document.getElementById('preview-date').innerText = dateStr;
     document.getElementById('print-room-dims').innerText = dimsStr;
     document.getElementById('preview-room-dims').innerText = dimsStr;
-    
-    // 2. 현재 활성화된 화면 캡쳐하여 인쇄/미리보기 이미지 영역에 삽입
-    const prevSelectedId = state.selectedId;
-    state.selectedId = null;
-    state.isExporting = true;
-    
-    let capturedImgUrl = '';
-    if (state.currentTab === 'plan' || state.currentTab === 'elevation') {
-        render2D();
-        capturedImgUrl = canvas2d.toDataURL('image/png');
-    } else {
-        update3DScene();
-        state.three.renderer.render(state.three.scene, state.three.camera);
-        capturedImgUrl = state.three.renderer.domElement.toDataURL('image/png');
+
+    let views = getSelectedPrintViews();
+    if (views.length === 0) {
+        const fallback = state.currentTab === '3d' ? '3d' : state.currentTab;
+        views = [fallback];
     }
-    
-    document.getElementById('print-image').src = capturedImgUrl;
-    document.getElementById('preview-image').src = capturedImgUrl;
-    
-    // 복원
-    state.selectedId = prevSelectedId;
-    state.isExporting = false;
-    
-    if (state.currentTab === 'plan' || state.currentTab === 'elevation') {
-        render2D();
-    } else {
-        update3DScene();
-    }
-    
-    // 3. 가구 자재 명세 일람 테이블 작성 (실제 인쇄용 + 화면 미리보기용 둘 다)
+    const captures = views.map(type => ({ type, title: printViewTitle(type), url: capturePrintView(type) }));
+    const makePages = (isPreview) => captures.map((item, index) => `
+        <section class="print-view-page ${index > 0 ? 'print-page-break' : ''}">
+            <div class="print-view-title">${item.title}</div>
+            <div class="print-canvas-area"><img src="${item.url}" alt="${item.title}"></div>
+        </section>`).join('');
+    document.getElementById('print-view-pages').innerHTML = makePages(false);
+    document.getElementById('preview-view-pages').innerHTML = makePages(true);
+
     const printTbody = document.querySelector('#print-cabinet-table tbody');
     const previewTbody = document.querySelector('#preview-cabinet-table tbody');
-    
     printTbody.innerHTML = '';
     previewTbody.innerHTML = '';
-    
     if (state.cabinets.length === 0) {
         const emptyRow = `<tr><td colspan="9" style="text-align:center;">배치된 가구가 없습니다.</td></tr>`;
         printTbody.innerHTML = emptyRow;
@@ -2577,42 +3386,16 @@ function generatePrintData() {
         state.cabinets.forEach(cab => {
             const doorName = getDoorTypeNameKR(cab.doorType);
             const key = `${cab.name}_${cab.w}_${cab.d}_${cab.h}_${cab.t}_${cab.groove ? 'Y' : 'N'}_${doorName}`;
-            
-            const existing = summary.find(s => s.key === key);
-            if (existing) {
-                existing.count++;
-            } else {
-                summary.push({
-                    key,
-                    name: cab.name,
-                    w: cab.w,
-                    d: cab.d,
-                    h: cab.h,
-                    t: cab.t,
-                    groove: cab.groove ? '적용' : '미적용',
-                    door: doorName,
-                    count: 1
-                });
-            }
+            const existing = summary.find(item => item.key === key);
+            if (existing) existing.count++;
+            else summary.push({ key, name: cab.name, w: cab.w, d: cab.d, h: cab.h, t: cab.t, groove: cab.groove ? '적용' : '미적용', door: doorName, count: 1 });
         });
-        
         summary.forEach((item, index) => {
+            const rowContent = `<td>${index + 1}</td><td><strong>${item.name}</strong></td><td>${item.w}</td><td>${item.d}</td><td>${item.h}</td><td>${item.t}T</td><td>${item.groove}</td><td>${item.door}</td><td><strong>${item.count}</strong></td>`;
             const trPrint = document.createElement('tr');
             const trPreview = document.createElement('tr');
-            const rowContent = `
-                <td>${index + 1}</td>
-                <td><strong>${item.name}</strong></td>
-                <td>${item.w}</td>
-                <td>${item.d}</td>
-                <td>${item.h}</td>
-                <td>${item.t}T</td>
-                <td>${item.groove}</td>
-                <td>${item.door}</td>
-                <td><strong>${item.count}</strong></td>
-            `;
             trPrint.innerHTML = rowContent;
             trPreview.innerHTML = rowContent;
-            
             printTbody.appendChild(trPrint);
             previewTbody.appendChild(trPreview);
         });
@@ -2679,4 +3462,134 @@ function applyPresetView(preset) {
     
     state.three.controls.update();
     showStatusMessage(`3D 뷰어가 ${preset.toUpperCase()} 방향 프리셋으로 정렬되었습니다.`);
+}
+
+
+// ============================================================
+// v0.6 판재 자동 생성 엔진
+// ============================================================
+const PART_ROLE_LABELS = {
+    EP_LEFT:'좌측 EP', EP_RIGHT:'우측 EP', FLIP_DOOR:'플립 도어',
+    SIDE_LEFT:'좌판', SIDE_RIGHT:'우판', TOP:'상판', BOTTOM:'밑판',
+    HORIZONTAL_DIVIDER:'가로분할판', PARTITION:'세로칸막이',
+    ADJUSTABLE_SHELF:'이동선반', FIXED_SHELF:'고정선반',
+    BACK_PANEL:'뒤판', DOOR:'문짝', DRAWER_FRONT:'서랍앞판',
+    LEFT_FILLER:'좌멍판', RIGHT_FILLER:'우멍판'
+};
+
+function makePart(cab, role, name, thickness, width, height, qty=1, material='몸통재') {
+    return {
+        id:`part_${cab.id}_${role}_${Math.random().toString(36).slice(2,8)}`,
+        cabinetId:cab.id, cabinetName:cab.name, role, name,
+        material, thickness:Math.max(1,Math.round(thickness)),
+        width:Math.max(1,Math.round(width)), height:Math.max(1,Math.round(height)),
+        qty:Math.max(1,Math.round(qty))
+    };
+}
+
+function getDoorLeafCount(doorType){
+    if(doorType==='swing_double'||doorType==='sliding') return 2;
+    if(doorType==='swing_single_left'||doorType==='swing_single_right') return 1;
+    return 0;
+}
+
+function generateCabinetParts(cab){
+    if(!cab) return [];
+    if(cab.type==='fridge'){
+        migrateFridgeCabinet(cab);
+        const t=Math.max(1,Number(cab.t)||18), w=Number(cab.w)||1000, d=Number(cab.d)||650, h=Number(cab.h)||400;
+        const parts=[
+            makePart(cab,'EP_LEFT','좌측 EP',t,state.room.height,d),
+            makePart(cab,'EP_RIGHT','우측 EP',t,state.room.height,d),
+            makePart(cab,'TOP','상부장 상판',t,Math.max(1,w-2*t),d),
+            makePart(cab,'BOTTOM','상부장 밑판',t,Math.max(1,w-2*t),d),
+            makePart(cab,'SIDE_LEFT','상부장 좌판',t,h,d),
+            makePart(cab,'SIDE_RIGHT','상부장 우판',t,h,d),
+            makePart(cab,'BACK_PANEL','상부장 뒤판',9,Math.max(1,w-2*t),Math.max(1,h-2*t),1,'뒤판재'),
+            makePart(cab,'FLIP_DOOR','플립 도어',t,Math.max(1,w-4),Math.max(1,h-4),1,'도어재')
+        ]; cab.parts=parts; return parts;
+    }
+    ensureCabinetRows(cab);
+    const t=Math.max(1,Number(cab.t)||18);
+    const w=Math.max(t*2+1,Number(cab.w)||1);
+    const h=Math.max(t*2+1,Number(cab.h)||1);
+    const d=Math.max(1,Number(cab.d)||1);
+    const supportH=getCabinetSupportHeight(cab);
+    const bodyH=Math.max(t*2+1,h-supportH);
+    const innerW=Math.max(1,w-t*2);
+    const innerH=Math.max(1,bodyH-t*2);
+    const backT=Number(cab.backThickness)||9;
+    const bodyDepth=Math.max(1,d-(cab.groove?Math.max(0,Number(cab.grooveOffset)||0):0));
+    const parts=[];
+
+    parts.push(makePart(cab,'SIDE_LEFT','좌판',t,bodyH,bodyDepth));
+    parts.push(makePart(cab,'SIDE_RIGHT','우판',t,bodyH,bodyDepth));
+    parts.push(makePart(cab,'TOP','상판',t,innerW,bodyDepth));
+    parts.push(makePart(cab,'BOTTOM','밑판',t,innerW,bodyDepth));
+
+    const rows=ensureCabinetRows(cab);
+    if(rows.length>1) parts.push(makePart(cab,'HORIZONTAL_DIVIDER','가로분할판',t,innerW,bodyDepth,rows.length-1));
+
+    let shelfQty=0, drawerFrontQty=0;
+    rows.forEach((row,ri)=>{
+        const cols=row.columns||[];
+        if(cols.length>1) parts.push(makePart(cab,'PARTITION',`세로칸막이 R${ri+1}`,t,row.height,bodyDepth,cols.length-1));
+        cols.forEach((col,ci)=>{
+            const clearW=Math.max(1,Number(col.width)||innerW);
+            (col.sections||[]).forEach(sec=>{
+                if(sec.type==='shelf') shelfQty += 1;
+                if(sec.type==='drawer') drawerFrontQty += Math.max(1,Number(sec.drawers)||2);
+            });
+            const colShelfQty=(col.sections||[]).filter(sec=>sec.type==='shelf').length;
+            if(colShelfQty) parts.push(makePart(cab,'ADJUSTABLE_SHELF',`이동선반 R${ri+1}-C${ci+1}`,t,clearW,bodyDepth,colShelfQty));
+            const colDrawerQty=(col.sections||[]).filter(sec=>sec.type==='drawer').reduce((sum,sec)=>sum+Math.max(1,Number(sec.drawers)||2),0);
+            if(colDrawerQty){
+                const frontH=Math.max(80,Math.floor(row.height/Math.max(1,colDrawerQty))-3);
+                parts.push(makePart(cab,'DRAWER_FRONT',`서랍앞판 R${ri+1}-C${ci+1}`,t,Math.max(1,clearW-3),frontH,colDrawerQty,'도어재'));
+            }
+        });
+    });
+
+    const fillerSide=cab.fillerSide||'none';
+    if((cab.type==='sink_base'||cab.type==='sink_corner') && (fillerSide==='left'||fillerSide==='both')){
+        parts.push(makePart(cab,'LEFT_FILLER','좌멍판',t,Math.max(1,Number(cab.leftFillerWidth)||50),bodyH,1,'도어재'));
+    }
+    if((cab.type==='sink_base'||cab.type==='sink_corner') && (fillerSide==='right'||fillerSide==='both')){
+        parts.push(makePart(cab,'RIGHT_FILLER','우멍판',t,Math.max(1,Number(cab.rightFillerWidth)||50),bodyH,1,'도어재'));
+    }
+
+    parts.push(makePart(cab,'BACK_PANEL','뒤판',backT,w,h-supportH,1,'뒤판재'));
+
+    const leafCount=getDoorLeafCount(cab.doorType);
+    if(leafCount){
+        const gap=2;
+        const doorW=Math.max(1,(w-gap*(leafCount+1))/leafCount);
+        const doorH=Math.max(1,bodyH-gap*2);
+        parts.push(makePart(cab,'DOOR','문짝',t,doorW,doorH,leafCount,'도어재'));
+    } else if(/^drawer_/.test(cab.doorType||'')){
+        const count=Math.max(1,Number((cab.doorType||'').split('_')[1])||2);
+        parts.push(makePart(cab,'DRAWER_FRONT','서랍앞판',t,w-4,Math.max(80,(bodyH-4-count*2)/count),count,'도어재'));
+    }
+
+    cab.parts=parts;
+    return parts;
+}
+
+function refreshPartsPanel(){
+    const body=document.getElementById('parts-table-body');
+    if(!body) return;
+    const cab=state.cabinets.find(c=>c.id===state.selectedId);
+    if(!cab){
+        body.innerHTML='<tr><td colspan="6">가구를 선택하세요.</td></tr>';
+        const kc=document.getElementById('parts-kind-count'), tq=document.getElementById('parts-total-qty');
+        if(kc)kc.textContent='0'; if(tq)tq.textContent='0'; return;
+    }
+    const parts=generateCabinetParts(cab);
+    body.innerHTML=parts.map(p=>`<tr data-part-id="${p.id}"><td>${p.name}</td><td>${PART_ROLE_LABELS[p.role]||p.role}</td><td>${p.thickness}T</td><td>${p.width}</td><td>${p.height}</td><td>${p.qty}</td></tr>`).join('');
+    document.getElementById('parts-kind-count').textContent=parts.length;
+    document.getElementById('parts-total-qty').textContent=parts.reduce((s,p)=>s+p.qty,0);
+}
+
+function generateAllCabinetParts(){
+    return state.cabinets.flatMap(c=>generateCabinetParts(c));
 }
