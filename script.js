@@ -1,4 +1,4 @@
-// LK Furniture Maker v0.7.2 - 냉장고 설치장 + 실행취소(Ctrl+Z)
+// LK Furniture Maker v0.8.0 - 냉장고 설치장 + 실행취소(Ctrl+Z)
 /* SCRIPT.JS - 가구 도면 제작 및 배치 시스템 핵심 로직 */
 
 // 전역 애플리케이션 상태
@@ -10,7 +10,7 @@ const state = {
     },
     cabinets: [],
     selectedId: null,
-    currentTab: 'plan', // 'plan', 'elevation', '3d'
+    currentTab: 'plan', // 'plan', 'elevation', 'wireframe', '3d'
     
     // 2D 캔버스 뷰포트 상태
     plan: {
@@ -54,6 +54,11 @@ const state = {
         doorsOpen: false,
         lockRotate: false,
         techStyle: false,
+        wireAngle: 30,
+        wireDistance: null,
+        wireToolbarCollapsed: false,
+        wireDimensions: { enabled: false, fontSize: 18, width: true, height: true, depth: true, support: true, molding: true },
+        resizeObserver: null,
         raycaster: null,
         pointer: null,
         dragPlane: null,
@@ -70,7 +75,14 @@ const state = {
 
 // 가구 종류별 기본 스펙 정의 (Default Dimensions)
 const CAB_DEFAULTS = {
-    sink_base: { name: '싱크대 (하부장)', w: 900, d: 600, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 1, kickplate: 100, z: 0, fillerSide: 'none', leftFillerWidth: 50, rightFillerWidth: 50 },
+    sink_base: { name: '싱크대 하부장 (싱크볼)', w: 900, d: 600, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 0, kickplate: 100, z: 0, fillerSide: 'none', leftFillerWidth: 50, rightFillerWidth: 50, applianceType: 'sink' },
+    sink_base_plain: { name: '싱크대 하부장 (기본장)', w: 600, d: 600, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 0, kickplate: 100, z: 0, fillerSide: 'none', leftFillerWidth: 50, rightFillerWidth: 50, applianceType: 'plain' },
+    sink_base_range: { name: '싱크대 하부장 (가스레인지)', w: 600, d: 600, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 0, kickplate: 100, z: 0, fillerSide: 'none', leftFillerWidth: 50, rightFillerWidth: 50, applianceType: 'range' },
+    sink_base_cooktop: { name: '싱크대 하부장 (쿡탑)', w: 600, d: 600, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 0, kickplate: 100, z: 0, fillerSide: 'none', leftFillerWidth: 50, rightFillerWidth: 50, applianceType: 'cooktop' },
+    sink_base_induction: { name: '싱크대 하부장 (인덕션)', w: 600, d: 600, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 0, kickplate: 100, z: 0, fillerSide: 'none', leftFillerWidth: 50, rightFillerWidth: 50, applianceType: 'induction' },
+    sink_base_dishwasher: { name: '식기세척기장', w: 600, d: 600, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'none', shelves: 0, kickplate: 100, z: 0, fillerSide: 'none', leftFillerWidth: 50, rightFillerWidth: 50, applianceType: 'dishwasher' },
+    sink_base_washer: { name: '빌트인 드럼세탁기장', w: 600, d: 600, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'none', shelves: 0, kickplate: 100, z: 0, fillerSide: 'none', leftFillerWidth: 50, rightFillerWidth: 50, applianceType: 'washer' },
+    sink_base_robot: { name: '로봇청소기장', w: 600, d: 600, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 0, kickplate: 100, z: 0, fillerSide: 'none', leftFillerWidth: 50, rightFillerWidth: 50, applianceType: 'robot' },
     sink_corner: { name: '싱크대 코너장', w: 900, d: 900, h: 850, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_single_left', shelves: 1, kickplate: 100, z: 0, isCorner: true, fillerSide: 'none', leftFillerWidth: 50, rightFillerWidth: 50 },
     sink_wall: { name: '싱크대 (상부장)', w: 900, d: 350, h: 700, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'swing_double', shelves: 2, kickplate: 0, z: 1500 },
     fridge: { name: '냉장고 설치장 (상부장+EP)', w: 1000, d: 650, h: 400, t: 18, color: '#ffffff', groove: true, grooveDepth: 9, grooveOffset: 15, doorType: 'flip_up', shelves: 0, kickplate: 0, z: 0, isFridgeInstall: true },
@@ -131,6 +143,25 @@ function redoAction() {
     restoreHistorySnapshot(state.history.redo.pop());
     showStatusMessage('되돌린 작업을 다시 실행했습니다.');
 }
+
+const SINK_APPLIANCE_BY_TYPE = {
+    sink_base: 'sink',
+    sink_base_plain: 'plain',
+    sink_base_range: 'range',
+    sink_base_cooktop: 'cooktop',
+    sink_base_induction: 'induction',
+    sink_base_dishwasher: 'dishwasher',
+    sink_base_washer: 'washer',
+    sink_base_robot: 'robot'
+};
+
+function getSinkApplianceType(cab) {
+    if (!cab) return 'plain';
+    const inferred = SINK_APPLIANCE_BY_TYPE[cab.type];
+    if (inferred && cab.applianceType !== inferred) cab.applianceType = inferred;
+    return cab.applianceType || inferred || 'plain';
+}
+
 function migrateFridgeCabinet(cab) {
     if (!cab || cab.type !== 'fridge') return cab;
     // 예전 한 통짜리 냉장고장을 새 설치장 규격으로 자동 변환
@@ -178,13 +209,7 @@ function initApp() {
 window.addEventListener('resize', () => {
     resizeCanvas();
     render2D();
-    if (state.three.renderer) {
-        const width = wrapper3d.clientWidth;
-        const height = wrapper3d.clientHeight;
-        state.three.camera.aspect = width / height;
-        state.three.camera.updateProjectionMatrix();
-        state.three.renderer.setSize(width, height);
-    }
+    resize3DViewport();
 });
 
 function resizeCanvas() {
@@ -218,7 +243,7 @@ function setupEventListeners() {
         document.getElementById('preview-modal').style.display = 'none';
     });
 
-    ['print-check-plan', 'print-check-elevation', 'print-check-3d'].forEach(id => {
+    ['print-check-plan', 'print-check-elevation', 'print-check-3d', 'print-check-table'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.addEventListener('change', generatePrintData);
     });
@@ -415,9 +440,10 @@ function setupEventListeners() {
     });
     
     // 뷰포트 전환 탭
-    document.getElementById('tab-2d-plan').addEventListener('click', (e) => switchTab('plan', e.target));
-    document.getElementById('tab-2d-elevation').addEventListener('click', (e) => switchTab('elevation', e.target));
-    document.getElementById('tab-3d').addEventListener('click', (e) => switchTab('3d', e.target));
+    document.getElementById('tab-2d-plan').addEventListener('click', (e) => switchTab('plan', e.currentTarget));
+    document.getElementById('tab-2d-elevation').addEventListener('click', (e) => switchTab('elevation', e.currentTarget));
+    document.getElementById('tab-wireframe').addEventListener('click', (e) => switchTab('wireframe', e.currentTarget));
+    document.getElementById('tab-3d').addEventListener('click', (e) => switchTab('3d', e.currentTarget));
     
     // 캔버스 오버레이 컨트롤
     const btnDetails = document.getElementById('btn-toggle-details');
@@ -459,6 +485,45 @@ function setupEventListeners() {
     document.getElementById('btn-3d-preset-top').addEventListener('click', () => applyPresetView('top'));
     document.getElementById('btn-3d-preset-side').addEventListener('click', () => applyPresetView('side'));
 
+    document.getElementById('btn-3d-fit').addEventListener('click', () => fit3DView());
+    document.getElementById('btn-wire-fit').addEventListener('click', () => fit3DView({ keepDirection: true }));
+    const wireRange = document.getElementById('wire-angle-range');
+    const wireNumber = document.getElementById('wire-angle-number');
+    const setWireAngle = (value) => {
+        const angle = Math.max(-180, Math.min(180, Number(value) || 0));
+        state.three.wireAngle = angle;
+        wireRange.value = angle;
+        wireNumber.value = angle;
+        document.querySelectorAll('.wire-angle-btn').forEach(btn => btn.classList.toggle('active', Number(btn.dataset.angle) === angle));
+        if (state.currentTab === 'wireframe') applyWireframeAngle(angle);
+    };
+    wireRange.addEventListener('input', e => setWireAngle(e.target.value));
+    wireNumber.addEventListener('input', e => setWireAngle(e.target.value));
+    document.getElementById('btn-wire-angle-minus').addEventListener('click', () => setWireAngle(state.three.wireAngle - 1));
+    document.getElementById('btn-wire-angle-plus').addEventListener('click', () => setWireAngle(state.three.wireAngle + 1));
+    document.querySelectorAll('.wire-angle-btn').forEach(btn => btn.addEventListener('click', () => setWireAngle(btn.dataset.angle)));
+    setWireAngle(state.three.wireAngle);
+
+    const toolbarToggle = document.getElementById('btn-wire-toolbar-toggle');
+    if (toolbarToggle) toolbarToggle.addEventListener('click', () => {
+        state.three.wireToolbarCollapsed = !state.three.wireToolbarCollapsed;
+        document.getElementById('wireframe-toolbar').classList.toggle('collapsed', state.three.wireToolbarCollapsed);
+        toolbarToggle.innerHTML = state.three.wireToolbarCollapsed ? '<span>설정 펼치기</span> ▼' : '<span>설정 접기</span> ▲';
+        setTimeout(() => { resize3DViewport(); }, 30);
+    });
+    const bindWireDim = (id, key, isNumber=false) => {
+        const el=document.getElementById(id); if(!el) return;
+        const sync=()=>{ state.three.wireDimensions[key]=isNumber ? Math.max(10,Math.min(48,Number(el.value)||18)) : !!el.checked; updateWireDimensionOverlay(); };
+        el.addEventListener(isNumber?'input':'change',sync); sync();
+    };
+    bindWireDim('wire-dim-enabled','enabled');
+    bindWireDim('wire-dim-font','fontSize',true);
+    bindWireDim('wire-dim-width','width');
+    bindWireDim('wire-dim-height','height');
+    bindWireDim('wire-dim-depth','depth');
+    bindWireDim('wire-dim-support','support');
+    bindWireDim('wire-dim-molding','molding');
+
     const btnTechStyle = document.getElementById('btn-3d-tech-style');
     btnTechStyle.addEventListener('click', () => {
         state.three.techStyle = !state.three.techStyle;
@@ -498,17 +563,19 @@ function setupEventListeners() {
         const currentRows = ensureCabinetRows(cab);
         if (currentRows.length > 1 && !confirm('현재 가로 분할을 2칸으로 다시 구성할까요?')) return;
         const usable = Math.max(500, getCabinetUsableInnerHeight(cab) - cab.t);
-        const lowerH = Math.round((usable * 0.52) / 10) * 10;
+        // 키큰장/수납장은 기본적으로 정확한 정분할, 위·아래 모두 빈칸으로 생성
+        const lowerH = Math.round((usable / 2) / 10) * 10;
         const upperH = usable - lowerH;
-        const baseColumns = JSON.parse(JSON.stringify(currentRows[0].columns));
-        cab.rows = [
-            createCabinetRow(cab, lowerH, baseColumns),
-            createCabinetRow(cab, upperH, [createCabinetColumn(cab, getCabinetUsableInnerWidth(cab), [createInternalSection('open', upperH)])])
-        ];
+        const emptyRow = (height) => createCabinetRow(
+            cab,
+            height,
+            [createCabinetColumn(cab, getCabinetUsableInnerWidth(cab), [createInternalSection('open', height)])]
+        );
+        cab.rows = [emptyRow(lowerH), emptyRow(upperH)];
         cab.rows.forEach(row => { autoFitRowColumns(cab, row); row.columns.forEach(col => autoFitSections(col.sections, row.height)); });
         syncLegacySections(cab);
         refreshInternalEditor(); render2D(); update3DScene();
-        showStatusMessage(`가구를 하부 ${lowerH}mm / 상부 ${upperH}mm로 가로 2분할했습니다.`);
+        showStatusMessage(`가구를 상·하 정분할하고 두 칸 모두 선반 없는 빈칸으로 만들었습니다.`);
     });
 
     document.getElementById('btn-row-auto-fit').addEventListener('click', () => {
@@ -692,26 +759,32 @@ function setupEventListeners() {
 // 탭 전환 핸들러
 function switchTab(tab, tabElement) {
     state.currentTab = tab;
-    
-    // 탭 버튼 active 클래스 수정
+
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-    tabElement.classList.add('active');
-    
-    // 뷰포트 영역 보이기/숨기기
+    if (tabElement) tabElement.classList.add('active');
+
     if (tab === 'plan' || tab === 'elevation') {
         wrapper2d.classList.add('active');
         wrapper3d.classList.remove('active');
-        
-        // 범례 텍스트 수정
+        wrapper3d.classList.remove('camera-wireframe-mode');
         const legend = document.getElementById('legend-view-type');
         legend.innerText = tab === 'plan' ? '2D 평면도 (TOP VIEW)' : '2D 정면도 (ELEVATION VIEW)';
-        
+        resizeCanvas();
         render2D();
-    } else if (tab === '3d') {
+        return;
+    }
+
+    if (tab === 'wireframe' || tab === '3d') {
         wrapper2d.classList.remove('active');
         wrapper3d.classList.add('active');
-        
-        update3DScene();
+        wrapper3d.classList.toggle('camera-wireframe-mode', tab === 'wireframe');
+        set3DViewportMode(tab);
+        requestAnimationFrame(() => {
+            resize3DViewport();
+            update3DScene();
+            if (tab === 'wireframe') applyWireframeAngle(state.three.wireAngle, true);
+            else fit3DView({ keepDirection: true });
+        });
     }
 }
 
@@ -919,6 +992,7 @@ function addCabinet(type, category, x, y) {
         fillerSide: specs.fillerSide || 'none',
         leftFillerWidth: specs.leftFillerWidth || 50,
         rightFillerWidth: specs.rightFillerWidth || 50,
+        applianceType: specs.applianceType || SINK_APPLIANCE_BY_TYPE[type] || null,
         isFridgeInstall: !!specs.isFridgeInstall
     };
     migrateFridgeCabinet(newCab);
@@ -1027,7 +1101,7 @@ function syncPropFields(cab) {
 function updateSinkFillerVisibility(cab){
     const wrap=document.getElementById('sink-filler-settings');
     if(!wrap) return;
-    const isSinkBase = !!cab && (cab.type==='sink_base' || cab.type==='sink_corner');
+    const isSinkBase = !!cab && ((cab.type||'').startsWith('sink_base') || cab.type==='sink_corner');
     wrap.style.display = isSinkBase ? 'block' : 'none';
     if(!isSinkBase) return;
     const side=cab.fillerSide||'none';
@@ -1375,6 +1449,37 @@ function drawCabinetPlan(cab, isSelected) {
         }
     }
 
+    // 싱크대 하부장 상판 기기 기호
+    if ((cab.type || '').startsWith('sink_base')) {
+        const appliance = getSinkApplianceType(cab);
+        ctx2d.save();
+        ctx2d.strokeStyle = theme.dimension;
+        ctx2d.fillStyle = theme.textPrimary;
+        ctx2d.lineWidth = 1.5;
+        if (appliance === 'sink') {
+            ctx2d.strokeRect(-localW*0.30, -localD*0.25, localW*0.60, localD*0.50);
+            ctx2d.strokeRect(-localW*0.22, -localD*0.18, localW*0.44, localD*0.34);
+        } else if (['range','cooktop','induction'].includes(appliance)) {
+            ctx2d.strokeRect(-localW*0.30, -localD*0.23, localW*0.60, localD*0.46);
+            const rr = Math.min(localW, localD) * 0.07;
+            [[-.15,-.12],[.15,-.12],[-.15,.12],[.15,.12]].forEach(([px,py])=>{
+                ctx2d.beginPath(); ctx2d.arc(localW*px, localD*py, rr, 0, Math.PI*2); ctx2d.stroke();
+            });
+        } else if (appliance === 'dishwasher') {
+            ctx2d.strokeRect(-localW*0.34, -localD*0.28, localW*0.68, localD*0.56);
+            ctx2d.fillText('식기세척기', 0, 4);
+        } else if (appliance === 'washer') {
+            ctx2d.beginPath(); ctx2d.arc(0, 0, Math.min(localW,localD)*0.22, 0, Math.PI*2); ctx2d.stroke();
+            ctx2d.fillText('드럼', 0, 4);
+        } else if (appliance === 'robot') {
+            ctx2d.beginPath(); ctx2d.arc(0, localD*0.10, Math.min(localW,localD)*0.18, 0, Math.PI*2); ctx2d.stroke();
+            ctx2d.fillText('로봇', 0, -localD*0.20);
+        } else {
+            ctx2d.fillText('기본장', 0, 4);
+        }
+        ctx2d.restore();
+    }
+
     // 가구 중심 축 십자 표시
     ctx2d.strokeStyle = theme.gridMain;
     ctx2d.lineWidth = 0.5;
@@ -1562,7 +1667,8 @@ function drawCabinetElevation(cab, isSelected) {
         
         const cabinetInnerH = bodyBottom - bodyTop - t*2;
         
-        if (cab.doorType === 'swing_double' || cab.doorType === 'swing_single_left' || cab.doorType === 'swing_single_right') {
+        const showDoorFronts = state.currentTab !== 'wireframe';
+    if (showDoorFronts && (cab.doorType === 'swing_double' || cab.doorType === 'swing_single_left' || cab.doorType === 'swing_single_right')) {
             const doorTop = bodyTop + t + channelH;
             const doorBottom = bodyBottom - 3; // 3mm 바닥 공제
             const doorH = doorBottom - doorTop;
@@ -1638,7 +1744,7 @@ function drawCabinetElevation(cab, isSelected) {
                 ctx2d.lineTo(drawX, doorBottom);
                 ctx2d.stroke();
             }
-        } else if (cab.doorType === 'drawer_2' || cab.doorType === 'drawer_3') {
+        } else if (state.currentTab !== 'wireframe' && (cab.doorType === 'drawer_2' || cab.doorType === 'drawer_3')) {
             const N = cab.doorType === 'drawer_2' ? 2 : 3;
             // 각 칸막이당 찬넬 공제 높이 계산
             const drawerH = (cabinetInnerH - channelH * N) / N;
@@ -1712,7 +1818,7 @@ function drawCabinetElevation(cab, isSelected) {
             } else if (cab.doorType === 'swing_single_left' || cab.doorType === 'swing_single_right') {
                 const singleDoorW = Math.round(visualW - 4);
                 ctx2d.fillText(`${singleDoorW}`, drawX + visualW / 2, bodyBottom - 15);
-            } else if (cab.doorType === 'sliding') {
+            } else if (showDoorFronts && cab.doorType === 'sliding') {
                 const doorW = Math.round((visualW + 20) / 2);
                 ctx2d.fillText(`문:${doorW}`, drawX + visualW / 4, bodyBottom - 15);
                 ctx2d.fillText(`문:${doorW}`, drawX + (visualW * 3) / 4, bodyBottom - 30);
@@ -2309,6 +2415,7 @@ function init3D() {
     state.three.renderer.shadowMap.enabled = true;
     state.three.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(state.three.renderer.domElement);
+    state.three.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     
     // 4. Controls 세팅 (OrbitControls)
     state.three.controls = new THREE.OrbitControls(state.three.camera, state.three.renderer.domElement);
@@ -2317,6 +2424,12 @@ function init3D() {
     state.three.controls.maxPolarAngle = Math.PI / 2 - 0.05; // 바닥 밑으로 카메라 못 내려가게
     state.three.controls.minDistance = 200;
     state.three.controls.maxDistance = 15000;
+
+    // 컨테이너 크기가 바뀌면 3D 캔버스도 즉시 전체 영역으로 재계산
+    if (window.ResizeObserver) {
+        state.three.resizeObserver = new ResizeObserver(() => resize3DViewport());
+        state.three.resizeObserver.observe(container);
+    }
 
     // 3D 선택 및 바닥면 드래그 이동 준비
     setup3DInteraction();
@@ -2360,6 +2473,7 @@ function init3D() {
     function animate() {
         requestAnimationFrame(animate);
         state.three.controls.update();
+        if (state.currentTab === 'wireframe') updateWireDimensionOverlay();
         state.three.renderer.render(state.three.scene, state.three.camera);
     }
     animate();
@@ -2578,7 +2692,7 @@ function update3DScene() {
         if (roomWallsMesh) roomWallsMesh.visible = false; // 투명 벽체 감춤
         if (roomFloorMesh) roomFloorMesh.visible = false; // 바닥 메쉬도 감추어 순백 바탕에 가구만 노출
     } else {
-        scene.background = new THREE.Color(0x0b0f19); // 기존 모던 다크 블루
+        scene.background = new THREE.Color(state.currentTab === 'wireframe' ? 0xffffff : 0x0b0f19); // 와이어프레임은 출력용 흰 배경
         if (roomGridHelper) roomGridHelper.visible = true;
         if (roomWallsMesh) roomWallsMesh.visible = true;
         if (roomFloorMesh) roomFloorMesh.visible = true;
@@ -2598,6 +2712,10 @@ function update3DScene() {
         const cabMesh = createCabinet3DMesh(cab);
         group.add(cabMesh);
     });
+
+    // 2D 와이어프레임은 재질 색상과 선택 강조를 모두 제거하고
+    // 흰 바탕 + 검정 외곽선으로 통일한다.
+    if (state.currentTab === 'wireframe') applyPureWireframeStyle();
 }
 
 function createFridgeInstallation3D(cab) {
@@ -2616,13 +2734,15 @@ function createFridgeInstallation3D(cab) {
     add(new THREE.BoxGeometry(T,H,D),T/2,upperY+H/2,0);
     add(new THREE.BoxGeometry(T,H,D),W-T/2,upperY+H/2,0);
     add(new THREE.BoxGeometry(W-2*T,H-2*T,3),W/2,upperY+H/2,-D/2+2);
-    // 플립업 도어
-    const doorT=18, doorGroup=new THREE.Group();
-    doorGroup.position.set(W/2,totalH-T,D/2+doorT/2);
-    const door= new THREE.Mesh(new THREE.BoxGeometry(W-4,H-4,doorT),doorMat);
-    door.position.set(0,-(H-4)/2,0); door.castShadow=true; doorGroup.add(door);
-    if(state.three.doorsOpen) doorGroup.rotation.x=-Math.PI/2.5;
-    group.add(doorGroup);
+    // 플립업 도어: 2D 와이어프레임에서는 내부 구조 확인을 위해 숨김
+    if (state.currentTab !== 'wireframe') {
+        const doorT=18, doorGroup=new THREE.Group();
+        doorGroup.position.set(W/2,totalH-T,D/2+doorT/2);
+        const door= new THREE.Mesh(new THREE.BoxGeometry(W-4,H-4,doorT),doorMat);
+        door.position.set(0,-(H-4)/2,0); door.castShadow=true; doorGroup.add(door);
+        if(state.three.doorsOpen) doorGroup.rotation.x=-Math.PI/2.5;
+        group.add(doorGroup);
+    }
     if(cab.id===state.selectedId) group.add(new THREE.BoxHelper(leftEP,0x818cf8));
     const rotated=getCabinetRotatedDims(cab),rad=-(Number(cab.rotation||0)*Math.PI)/180;
     [...group.children].forEach(ch=>{ch.position.x-=W/2;ch.position.z-=D/2;});
@@ -2720,7 +2840,7 @@ function createCabinet3DMesh(cab) {
     
     // 4. 천판/천정판 (Top Panel)
     // 상부장 혹은 키큰장/옷장은 전체 덮는 천판이고, 하부 싱크대는 보통 뼈대용 보강목(스트레쳐) 2개로 고정
-    const isBaseKitchen = cab.type === 'sink_base' || cab.type === 'island';
+    const isBaseKitchen = (cab.type||'').startsWith('sink_base') || cab.type === 'island';
     
     if (isBaseKitchen) {
         // 싱크대 하부장은 보통 상단 앞/뒤에 가로로 얇은 찬넬/보강목만 들어감 (W-2T, T, 60)
@@ -2867,7 +2987,7 @@ function createCabinet3DMesh(cab) {
     }
     
     // 9. 싱크대 하부장 전용 싱크볼(상판 타공 및 메탈 볼) 3D 표현
-    if (cab.type === 'sink_base') {
+    if ((cab.type || '').startsWith('sink_base')) {
         // 인조대리석 상판 (W, 40, D+10)
         const counterMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.4, metalness: 0.1 });
         const countertop = new THREE.Mesh(new THREE.BoxGeometry(W + 4, 40, D + 15), counterMat);
@@ -2876,24 +2996,66 @@ function createCabinet3DMesh(cab) {
         countertop.receiveShadow = true;
         cabGroup.add(countertop);
         
-        // 싱크볼 (스텐 사각)
-        const sinkBowl = new THREE.Mesh(new THREE.BoxGeometry(W * 0.7, 5, D * 0.6), metalMat);
-        sinkBowl.position.set(W/2, H + 40.5, 0);
-        cabGroup.add(sinkBowl);
-        
-        // 수전 (간단한 L자형 파이프 실린더)
-        const faucetGroup = new THREE.Group();
-        const pipeVertical = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, 120, 8), metalMat);
-        pipeVertical.position.set(0, 60, 0);
-        faucetGroup.add(pipeVertical);
-        
-        const pipeHorizontal = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 80, 8), metalMat);
-        pipeHorizontal.rotation.x = Math.PI / 2;
-        pipeHorizontal.position.set(0, 120, 30);
-        faucetGroup.add(pipeHorizontal);
-        
-        faucetGroup.position.set(W/2, H + 40, -D*0.3);
-        cabGroup.add(faucetGroup);
+        const appliance = getSinkApplianceType(cab);
+        if (appliance === 'sink') {
+            const sinkBowl = new THREE.Mesh(new THREE.BoxGeometry(W * 0.7, 5, D * 0.6), metalMat);
+            sinkBowl.position.set(W/2, H + 40.5, 0);
+            cabGroup.add(sinkBowl);
+            const faucetGroup = new THREE.Group();
+            const pipeVertical = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, 120, 8), metalMat);
+            pipeVertical.position.set(0, 60, 0);
+            faucetGroup.add(pipeVertical);
+            const pipeHorizontal = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 80, 8), metalMat);
+            pipeHorizontal.rotation.x = Math.PI / 2;
+            pipeHorizontal.position.set(0, 120, 30);
+            faucetGroup.add(pipeHorizontal);
+            faucetGroup.position.set(W/2, H + 40, -D*0.3);
+            cabGroup.add(faucetGroup);
+        } else if (['range','cooktop','induction'].includes(appliance)) {
+            const topMat = new THREE.MeshStandardMaterial({ color: appliance === 'induction' ? 0x111827 : 0x2f3742, roughness: 0.25 });
+            const plate = new THREE.Mesh(new THREE.BoxGeometry(W * 0.72, 8, D * 0.58), topMat);
+            plate.position.set(W/2, H + 44, 0);
+            cabGroup.add(plate);
+            for (let i=0;i<4;i++) {
+                const ring = new THREE.Mesh(new THREE.TorusGeometry(Math.min(W,D)*0.07, 3, 8, 24), metalMat);
+                ring.rotation.x = Math.PI/2;
+                ring.position.set(W/2 + (i%2 ? 1 : -1)*W*0.16, H+49, (i<2 ? -1 : 1)*D*0.14);
+                cabGroup.add(ring);
+            }
+            if (appliance === 'range') {
+                const grateMat = new THREE.MeshStandardMaterial({ color: 0x0b0f14, roughness: 0.7 });
+                for (const sx of [-1,1]) {
+                    const grate = new THREE.Mesh(new THREE.BoxGeometry(W*0.26, 5, D*0.05), grateMat);
+                    grate.position.set(W/2 + sx*W*0.15, H+54, 0);
+                    cabGroup.add(grate);
+                }
+            }
+        } else if (appliance === 'dishwasher') {
+            const applianceMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.35, metalness: 0.55 });
+            const front = new THREE.Mesh(new THREE.BoxGeometry(Math.max(80,W-T*2-12), Math.max(120,H-kick-T-18), 24), applianceMat);
+            front.position.set(W/2, kick+(H-kick)/2, D/2+14);
+            cabGroup.add(front);
+            const control = new THREE.Mesh(new THREE.BoxGeometry(Math.max(60,W-T*2-45), 42, 8), new THREE.MeshStandardMaterial({color:0x1f2937,roughness:0.35}));
+            control.position.set(W/2,H-48,D/2+30); cabGroup.add(control);
+            const handle = new THREE.Mesh(new THREE.BoxGeometry(W*0.55,12,15),metalMat);
+            handle.position.set(W/2,H-92,D/2+35); cabGroup.add(handle);
+        } else if (appliance === 'washer') {
+            const applianceMat = new THREE.MeshStandardMaterial({ color: 0xe5e7eb, roughness: 0.3, metalness: 0.15 });
+            const front = new THREE.Mesh(new THREE.BoxGeometry(Math.max(80,W-T*2-12), Math.max(120,H-kick-T-18), 24), applianceMat);
+            front.position.set(W/2, kick+(H-kick)/2, D/2+14); cabGroup.add(front);
+            const rim = new THREE.Mesh(new THREE.TorusGeometry(Math.min(W,H)*0.22,18,12,48), new THREE.MeshStandardMaterial({color:0x374151,metalness:0.7,roughness:0.25}));
+            rim.position.set(W/2,kick+(H-kick)*0.46,D/2+34); cabGroup.add(rim);
+            const glass = new THREE.Mesh(new THREE.CircleGeometry(Math.min(W,H)*0.18,48),new THREE.MeshStandardMaterial({color:0x0f172a,transparent:true,opacity:0.78,roughness:0.1}));
+            glass.position.set(W/2,kick+(H-kick)*0.46,D/2+35); cabGroup.add(glass);
+            const controls = new THREE.Mesh(new THREE.BoxGeometry(W*0.65,45,8),new THREE.MeshStandardMaterial({color:0xf8fafc}));
+            controls.position.set(W/2,H-48,D/2+30); cabGroup.add(controls);
+        } else if (appliance === 'robot') {
+            const nicheMat = new THREE.MeshStandardMaterial({color:0x111827,roughness:0.75});
+            const nicheBack = new THREE.Mesh(new THREE.BoxGeometry(Math.max(80,W-T*2-24),240,10),nicheMat);
+            nicheBack.position.set(W/2,kick+120,-D/2+25); cabGroup.add(nicheBack);
+            const robot = new THREE.Mesh(new THREE.CylinderGeometry(Math.min(W,D)*0.23,Math.min(W,D)*0.23,70,40),new THREE.MeshStandardMaterial({color:0x202833,roughness:0.35,metalness:0.3}));
+            robot.position.set(W/2,kick+38,D/2-145); cabGroup.add(robot);
+        }
     }
     
     // 10. 도어 및 서랍 프런트 판재 렌더링 (도어 회전 경첩 애니메이션 축 연동 포함)
@@ -2954,7 +3116,7 @@ function createCabinet3DMesh(cab) {
         parentMesh.add(handleMesh);
     }
     
-    if (cab.doorType === 'swing_double' || cab.doorType === 'swing_single_left' || cab.doorType === 'swing_single_right') {
+    if (state.currentTab !== 'wireframe' && (cab.doorType === 'swing_double' || cab.doorType === 'swing_single_left' || cab.doorType === 'swing_single_right')) {
         const doorH = H - kick - T*2 - chH - 6; // 천/지판 두께 및 찬넬 높이 제외
         const doorY = kick + T + doorH/2;
         
@@ -3053,7 +3215,7 @@ function createCabinet3DMesh(cab) {
             cabGroup.add(doorGroup);
         }
         
-    } else if (cab.doorType === 'sliding') {
+    } else if (state.currentTab !== 'wireframe' && cab.doorType === 'sliding') {
         const doorH = H - kick - T*2 - 6;
         const doorY = kick + T + doorH/2;
         const slideW = (W + 20) / 2;
@@ -3073,7 +3235,7 @@ function createCabinet3DMesh(cab) {
         doorFront.add(handleCut);
         cabGroup.add(doorFront);
         
-    } else if (cab.doorType === 'drawer_2' || cab.doorType === 'drawer_3') {
+    } else if (state.currentTab !== 'wireframe' && (cab.doorType === 'drawer_2' || cab.doorType === 'drawer_3')) {
         const N = cab.doorType === 'drawer_2' ? 2 : 3;
         const innerCarcassH = H - kick - T*2;
         const drawH = (innerCarcassH - chH * N) / N;
@@ -3358,6 +3520,11 @@ function generatePrintData() {
     document.getElementById('preview-date').innerText = dateStr;
     document.getElementById('print-room-dims').innerText = dimsStr;
     document.getElementById('preview-room-dims').innerText = dimsStr;
+    const printTableChecked = !!document.getElementById('print-check-table')?.checked;
+    const printTableSection = document.getElementById('print-table-section');
+    const previewTableSection = document.getElementById('preview-table-section');
+    if (printTableSection) printTableSection.classList.toggle('is-enabled', printTableChecked);
+    if (previewTableSection) previewTableSection.classList.toggle('is-enabled', printTableChecked);
 
     let views = getSelectedPrintViews();
     if (views.length === 0) {
@@ -3420,6 +3587,386 @@ function getDoorTypeNameKR(type) {
         case 'drawer_3': return '3단 서랍';
         default: return '-';
     }
+}
+
+// 출력용 2D 와이어프레임 시각 스타일 통일
+function applyPureWireframeStyle() {
+    if (!state.three.scene || !state.three.cabinetsGroup) return;
+
+    // 방, 바닥, 그리드는 출력 도면에서 제외한다.
+    if (roomGridHelper) roomGridHelper.visible = false;
+    if (roomWallsMesh) roomWallsMesh.visible = false;
+    if (roomFloorMesh) roomFloorMesh.visible = false;
+
+    // 은선 제거의 핵심:
+    // 판재 면은 불투명한 흰색으로 유지하여 뒤쪽 선을 가리고,
+    // 보이는 모서리만 검정 EdgesGeometry로 겹쳐 그린다.
+    const faceMaterial = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        side: THREE.DoubleSide,
+        transparent: false,
+        opacity: 1,
+        depthTest: true,
+        depthWrite: true,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1
+    });
+    const edgeMaterial = new THREE.LineBasicMaterial({
+        color: 0x000000,
+        transparent: false,
+        opacity: 1,
+        depthTest: true,
+        depthWrite: false
+    });
+
+    state.three.cabinetsGroup.children.forEach(cabinetRoot => {
+        cabinetRoot.updateMatrixWorld(true);
+        const rootInverse = new THREE.Matrix4().copy(cabinetRoot.matrixWorld).invert();
+        const sourceMeshes = [];
+        const linesToRemove = [];
+
+        cabinetRoot.traverse(obj => {
+            if (obj.userData && obj.userData.hiddenLineEdge) {
+                linesToRemove.push(obj);
+                return;
+            }
+            if (obj.isMesh && obj.geometry) sourceMeshes.push(obj);
+            else if (obj.isLine || obj.isLineSegments || obj.isBoxHelper || obj.type === 'BoxHelper') {
+                linesToRemove.push(obj);
+            }
+        });
+
+        // 기존 외곽선·선택 박스는 제거하여 중복선을 방지한다.
+        linesToRemove.forEach(line => {
+            if (line.parent) line.parent.remove(line);
+            if (line.geometry && line.userData && line.userData.hiddenLineEdge) line.geometry.dispose();
+            if (line.material && line.userData && line.userData.hiddenLineEdge) line.material.dispose();
+        });
+
+        sourceMeshes.forEach(mesh => {
+            mesh.updateMatrixWorld(true);
+            const relativeMatrix = new THREE.Matrix4().multiplyMatrices(rootInverse, mesh.matrixWorld);
+
+            // 흰 면이 뒤쪽 모서리를 가리는 깊이 마스크 역할을 한다.
+            mesh.visible = true;
+            mesh.material = faceMaterial.clone();
+            mesh.castShadow = false;
+            mesh.receiveShadow = false;
+            mesh.renderOrder = 1;
+
+            const edgeGeometry = new THREE.EdgesGeometry(mesh.geometry, 20);
+            edgeGeometry.applyMatrix4(relativeMatrix);
+            const line = new THREE.LineSegments(edgeGeometry, edgeMaterial.clone());
+            line.name = 'hidden_line_edge';
+            line.userData.hiddenLineEdge = true;
+            line.userData.cabinetId = cabinetRoot.userData.cabinetId;
+            line.renderOrder = 2;
+            cabinetRoot.add(line);
+        });
+        updateWireframeInteriorBackEdge(cabinetRoot);
+    });
+}
+
+// 문짝을 숨긴 뒤에도 내부가 실제로 노출되는 장인지 판정한다.
+// 기구 전면이 막고 있는 장, 서랍장, 냉장고장, 코너장은 임의의 내부선을 추가하지 않는다.
+function isWireframeInteriorVisibleCabinet(cab) {
+    if (!cab || cab.type === 'fridge' || cab.isFridgeInstall || cab.isCorner) return false;
+    if (cab.doorType === 'drawer_2' || cab.doorType === 'drawer_3') return false;
+    const blockedAppliances = new Set(['dishwasher', 'washer']);
+    if (blockedAppliances.has(cab.applianceType)) return false;
+    return true;
+}
+
+// 시점 반대편의 내부 뒤 세로 모서리만 보강한다.
+// 우측 각도(+): 좌측 내부 뒤선 / 좌측 각도(-): 우측 내부 뒤선
+// 천판·선반·바닥판·상판(대리석)처럼 앞을 가리는 수평 부재 구간에서는 선을 끊는다.
+function updateWireframeInteriorBackEdge(cabinetRoot) {
+    if (!cabinetRoot) return;
+    [...cabinetRoot.children]
+        .filter(o => o.userData && o.userData.wireInteriorBackEdge)
+        .forEach(o => {
+            cabinetRoot.remove(o);
+            if (o.geometry) o.geometry.dispose();
+            if (o.material) o.material.dispose();
+        });
+
+    const cab = state.cabinets.find(c => c.id === cabinetRoot.userData.cabinetId);
+    if (!isWireframeInteriorVisibleCabinet(cab)) return;
+
+    const angle = Number(state.three.wireAngle || 0);
+    // 정면에 가까운 각도에서는 한쪽 선을 억지로 추가하지 않는다.
+    if (Math.abs(angle) < 2 || Math.abs(angle) > 88) return;
+
+    const W = Number(cab.w) || 0;
+    const D = Number(cab.d) || 0;
+    const H = Number(cab.h) || 0;
+    const T = Math.max(1, Number(cab.t) || 18);
+    const support = getCabinetSupportHeight(cab);
+    if (W <= T * 2 || H <= support + T * 2 || D <= 0) return;
+
+    // createCabinet3DMesh에서 부재를 중심좌표로 옮긴 뒤의 로컬 좌표:
+    // 전면 z=0, 후면 z=-D. 우라홈이 있으면 뒷판 앞면 쪽으로 약간 이동한다.
+    const backInset = cab.groove ? Math.max(3, Number(cab.grooveOffset || 15)) : 3;
+    const zBackInner = -D + backInset + 1.2;
+    const xInner = angle > 0 ? (-W / 2 + T + 0.9) : (W / 2 - T - 0.9);
+    const yBottom = support + T + 0.8;
+    const yTop = H - T - 0.8;
+
+    cabinetRoot.updateMatrixWorld(true);
+    const rootInverse = new THREE.Matrix4().copy(cabinetRoot.matrixWorld).invert();
+    const blocked = [];
+
+    // 선택한 안쪽 뒤 모서리를 실제로 덮는 수평 부재의 Y 구간을 수집한다.
+    // 세로 측판이나 칸막이는 제외하여 선 전체가 사라지는 것을 방지한다.
+    cabinetRoot.traverse(obj => {
+        if (!obj.isMesh || !obj.geometry || (obj.userData && obj.userData.hiddenLineEdge)) return;
+        obj.geometry.computeBoundingBox();
+        const bb = obj.geometry.boundingBox;
+        if (!bb) return;
+
+        obj.updateMatrixWorld(true);
+        const rel = new THREE.Matrix4().multiplyMatrices(rootInverse, obj.matrixWorld);
+        const xs = [bb.min.x, bb.max.x], ys = [bb.min.y, bb.max.y], zs = [bb.min.z, bb.max.z];
+        const localBox = new THREE.Box3();
+        localBox.makeEmpty();
+        for (const x of xs) for (const y of ys) for (const z of zs) {
+            localBox.expandByPoint(new THREE.Vector3(x, y, z).applyMatrix4(rel));
+        }
+
+        const size = new THREE.Vector3();
+        localBox.getSize(size);
+        const horizontalMaxThickness = Math.max(90, T * 5);
+        const isHorizontalBoard = size.y <= horizontalMaxThickness && size.x > T * 2;
+        if (!isHorizontalBoard) return;
+
+        // 해당 부재가 보강할 뒤 모서리 위치를 실제로 통과할 때만 가림 구간으로 사용한다.
+        const margin = 2.5;
+        const crossesX = xInner >= localBox.min.x - margin && xInner <= localBox.max.x + margin;
+        const crossesZ = zBackInner >= localBox.min.z - margin && zBackInner <= localBox.max.z + margin;
+        if (!crossesX || !crossesZ) return;
+
+        const lo = Math.max(yBottom, localBox.min.y - 0.6);
+        const hi = Math.min(yTop, localBox.max.y + 0.6);
+        if (hi > lo) blocked.push([lo, hi]);
+    });
+
+    // 겹치는 가림 구간을 합친 뒤, 남은 보이는 구간만 선분으로 만든다.
+    blocked.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    blocked.forEach(([lo, hi]) => {
+        const last = merged[merged.length - 1];
+        if (!last || lo > last[1] + 0.8) merged.push([lo, hi]);
+        else last[1] = Math.max(last[1], hi);
+    });
+
+    const visibleSegments = [];
+    let cursor = yBottom;
+    merged.forEach(([lo, hi]) => {
+        if (lo > cursor + 1.2) visibleSegments.push([cursor, lo]);
+        cursor = Math.max(cursor, hi);
+    });
+    if (yTop > cursor + 1.2) visibleSegments.push([cursor, yTop]);
+    if (!visibleSegments.length) return;
+
+    const points = [];
+    visibleSegments.forEach(([lo, hi]) => {
+        points.push(
+            new THREE.Vector3(xInner, lo, zBackInner),
+            new THREE.Vector3(xInner, hi, zBackInner)
+        );
+    });
+
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    // 보강선도 다른 부재와 동일하게 깊이 검사를 받도록 한다.
+    // 천판·선반·바닥판·대리석 상판 뒤에 위치한 구간은 해당 면에 가려져 보이지 않는다.
+    const material = new THREE.LineBasicMaterial({
+        color: 0x000000,
+        depthTest: true,
+        depthWrite: false,
+        transparent: false
+    });
+    const line = new THREE.LineSegments(geometry, material);
+    line.name = 'wire_interior_back_edge';
+    line.userData.wireInteriorBackEdge = true;
+    line.userData.cabinetId = cab.id;
+    line.renderOrder = 3;
+    cabinetRoot.add(line);
+}
+
+function refreshWireframeInteriorBackEdges() {
+    if (state.currentTab !== 'wireframe' || !state.three.cabinetsGroup) return;
+    state.three.cabinetsGroup.children.forEach(updateWireframeInteriorBackEdge);
+}
+
+function projectWirePoint(v) {
+    const container=document.getElementById('canvas-3d-container');
+    if(!container || !state.three.camera) return null;
+    const p=v.clone().project(state.three.camera);
+    return {x:(p.x*.5+.5)*container.clientWidth,y:(-.5*p.y+.5)*container.clientHeight,visible:p.z>-1&&p.z<1};
+}
+
+function updateWireDimensionOverlay() {
+    const layer=document.getElementById('wire-dimension-layer');
+    if(!layer) return;
+    const opt=state.three.wireDimensions;
+    if(state.currentTab!=='wireframe' || !opt || !opt.enabled){
+        layer.innerHTML='';
+        layer.style.display='none';
+        return;
+    }
+
+    layer.style.display='block';
+    layer.style.fontSize=opt.fontSize+'px';
+    const parts=[];
+
+    // 브라우저 CSS 계산식에 의존하지 않고 화면 좌표, 길이와 회전각을 직접 계산한다.
+    const addDimension=(kind,label,a,b,offsetX=0,offsetY=0)=>{
+        const pa=projectWirePoint(a), pb=projectWirePoint(b);
+        if(!pa || !pb || !pa.visible || !pb.visible) return;
+
+        const x1=pa.x+offsetX, y1=pa.y+offsetY;
+        const x2=pb.x+offsetX, y2=pb.y+offsetY;
+        const dx=x2-x1, dy=y2-y1;
+        const length=Math.hypot(dx,dy);
+        if(!Number.isFinite(length) || length<8) return;
+        const angle=Math.atan2(dy,dx)*180/Math.PI;
+
+        // 원래 가구 모서리에서 치수선까지 이어지는 보조선
+        const ext1Len=Math.hypot(offsetX,offsetY);
+        const ext1Angle=Math.atan2(offsetY,offsetX)*180/Math.PI;
+        const ext2Len=ext1Len;
+
+        parts.push(`
+            <div class="wire-dim wire-dim-${kind}" style="left:${x1}px;top:${y1}px;width:${length}px;transform:rotate(${angle}deg)">
+                <i class="wire-dim-main"></i>
+                <i class="wire-dim-tick wire-dim-tick-start"></i>
+                <i class="wire-dim-tick wire-dim-tick-end"></i>
+                <span>${label}</span>
+            </div>
+            ${ext1Len>1?`<i class="wire-dim-extension" style="left:${pa.x}px;top:${pa.y}px;width:${ext1Len}px;transform:rotate(${ext1Angle}deg)"></i>`:''}
+            ${ext2Len>1?`<i class="wire-dim-extension" style="left:${pb.x}px;top:${pb.y}px;width:${ext2Len}px;transform:rotate(${ext1Angle}deg)"></i>`:''}
+        `);
+    };
+
+    state.cabinets.forEach(cab=>{
+        const root=state.three.cabinetsGroup && state.three.cabinetsGroup.children.find(c=>c.userData.cabinetId===cab.id);
+        if(!root) return;
+        root.updateMatrixWorld(true);
+        const box=new THREE.Box3().setFromObject(root);
+        if(box.isEmpty()) return;
+        const min=box.min, max=box.max;
+
+        // 폭은 하단, 높이는 왼쪽, 깊이는 우측 상단에 고정 배치한다.
+        if(opt.width) addDimension('h',`폭 ${Math.round(cab.w)} mm`,
+            new THREE.Vector3(min.x,min.y,max.z),new THREE.Vector3(max.x,min.y,max.z),0,34);
+        if(opt.height) addDimension('v',`높이 ${Math.round(cab.h)} mm`,
+            new THREE.Vector3(min.x,min.y,max.z),new THREE.Vector3(min.x,max.y,max.z),-42,0);
+        if(opt.depth) addDimension('d',`깊이 ${Math.round(cab.d)} mm`,
+            new THREE.Vector3(max.x,max.y,min.z),new THREE.Vector3(max.x,max.y,max.z),28,-18);
+
+        const support=getCabinetSupportHeight(cab);
+        if(opt.support && support>0) addDimension('v',`${cab.supportType==='legs'?'다릿발':'걸레받이'} ${Math.round(support)} mm`,
+            new THREE.Vector3(max.x,min.y,max.z),new THREE.Vector3(max.x,min.y+support,max.z),38,0);
+
+        const molding=Number(cab.ceilingMolding||cab.crownMolding||cab.topMolding||cab.moldingHeight||0);
+        if(opt.molding && molding>0) addDimension('v',`천장마감 ${Math.round(molding)} mm`,
+            new THREE.Vector3(max.x,max.y-molding,max.z),new THREE.Vector3(max.x,max.y,max.z),50,0);
+    });
+
+    layer.innerHTML=parts.join('');
+}
+
+// 3D 캔버스를 현재 작업창 전체 크기에 정확히 맞춤
+function resize3DViewport() {
+    if (!state.three.renderer || !state.three.camera) return;
+    const container = document.getElementById('canvas-3d-container');
+    if (!container) return;
+    const width = Math.max(1, container.clientWidth);
+    const height = Math.max(1, container.clientHeight);
+    state.three.camera.aspect = width / height;
+    state.three.camera.updateProjectionMatrix();
+    state.three.renderer.setSize(width, height, false);
+}
+
+function set3DViewportMode(mode) {
+    if (!state.three.scene) return;
+    const wire = mode === 'wireframe';
+    state.three.techStyle = wire;
+    state.three.wireframe = false; // 전용 와이어프레임은 은선 제거 방식으로 표현
+    state.three.lockRotate = wire;
+    // 와이어프레임에서는 원근감을 크게 줄여 평행투영 도면처럼 보이게 한다.
+    state.three.camera.fov = wire ? 12 : 45;
+    state.three.camera.updateProjectionMatrix();
+    if (state.three.controls) {
+        state.three.controls.enableRotate = !wire;
+        state.three.controls.enablePan = true;
+        state.three.controls.screenSpacePanning = true;
+        if (wire && THREE.MOUSE) {
+            state.three.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+            state.three.controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+        }
+    }
+    state.three.scene.background = new THREE.Color(wire ? 0xffffff : 0x0b0f19);
+    const lockBtn = document.getElementById('btn-3d-lock-rotate');
+    const techBtn = document.getElementById('btn-3d-tech-style');
+    const wireBtn = document.getElementById('btn-3d-wireframe');
+    if (lockBtn) lockBtn.classList.toggle('active', state.three.lockRotate);
+    if (techBtn) techBtn.classList.toggle('active', state.three.techStyle);
+    if (wireBtn) wireBtn.classList.toggle('active', state.three.wireframe);
+}
+
+// 현재 카메라 방향을 유지하면서 방과 가구 전체가 잘리지 않도록 맞춤
+function fit3DView(options = {}) {
+    if (!state.three.camera || !state.three.controls || !state.three.scene) return;
+    resize3DViewport();
+    const box = new THREE.Box3();
+    if (state.three.cabinetsGroup && state.three.cabinetsGroup.children.length) {
+        box.expandByObject(state.three.cabinetsGroup);
+    }
+    // 일반 3D는 방 전체를 맞추고, 2D 와이어프레임은 가구만 크게 맞춘다.
+    if (state.currentTab !== 'wireframe') {
+        const roomBox = new THREE.Box3(
+            new THREE.Vector3(-state.room.width / 2, 0, -state.room.depth / 2),
+            new THREE.Vector3(state.room.width / 2, state.room.height, state.room.depth / 2)
+        );
+        box.union(roomBox);
+    }
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z, 1000);
+    const fov = state.three.camera.fov * Math.PI / 180;
+    const distance = (maxDim / (2 * Math.tan(fov / 2))) * (state.currentTab === 'wireframe' ? 1.08 : 1.28);
+    const direction = state.three.camera.position.clone().sub(state.three.controls.target).normalize();
+    if (!Number.isFinite(direction.length()) || direction.lengthSq() < 0.01) direction.set(1, .65, 1).normalize();
+    state.three.controls.target.copy(center);
+    state.three.camera.position.copy(center).add(direction.multiplyScalar(distance));
+    state.three.camera.near = Math.max(1, distance / 100);
+    state.three.camera.far = Math.max(50000, distance * 20);
+    state.three.camera.updateProjectionMatrix();
+    state.three.controls.update();
+    if (state.currentTab === 'wireframe') state.three.wireDistance = distance;
+}
+
+// 출력용 2D 와이어프레임: 좌우 각도만 바꾸고 높이/축척은 안정적으로 유지
+function applyWireframeAngle(angle, refit = false) {
+    if (!state.three.camera || !state.three.controls) return;
+    const target = state.three.controls.target.clone();
+    const distance = state.three.wireDistance || Math.max(state.room.width, state.room.depth, state.room.height) * 1.65;
+    const rad = THREE.MathUtils.degToRad(Number(angle) || 0);
+    const elevation = THREE.MathUtils.degToRad(8);
+    const horizontal = distance * Math.cos(elevation);
+    state.three.controls.target.copy(target);
+    state.three.camera.position.set(
+        target.x + Math.sin(rad) * horizontal,
+        target.y + Math.sin(elevation) * distance,
+        target.z + Math.cos(rad) * horizontal
+    );
+    state.three.camera.lookAt(target);
+    state.three.controls.update();
+    refreshWireframeInteriorBackEdges();
+    if (refit) fit3DView({ keepDirection: true });
+    document.querySelectorAll('.wire-angle-btn').forEach(btn => btn.classList.toggle('active', Number(btn.dataset.angle) === Number(angle)));
 }
 
 // 3D 뷰어 카메라 방향 프리셋 적용
@@ -3551,10 +4098,10 @@ function generateCabinetParts(cab){
     });
 
     const fillerSide=cab.fillerSide||'none';
-    if((cab.type==='sink_base'||cab.type==='sink_corner') && (fillerSide==='left'||fillerSide==='both')){
+    if(((cab.type||'').startsWith('sink_base')||cab.type==='sink_corner') && (fillerSide==='left'||fillerSide==='both')){
         parts.push(makePart(cab,'LEFT_FILLER','좌멍판',t,Math.max(1,Number(cab.leftFillerWidth)||50),bodyH,1,'도어재'));
     }
-    if((cab.type==='sink_base'||cab.type==='sink_corner') && (fillerSide==='right'||fillerSide==='both')){
+    if(((cab.type||'').startsWith('sink_base')||cab.type==='sink_corner') && (fillerSide==='right'||fillerSide==='both')){
         parts.push(makePart(cab,'RIGHT_FILLER','우멍판',t,Math.max(1,Number(cab.rightFillerWidth)||50),bodyH,1,'도어재'));
     }
 

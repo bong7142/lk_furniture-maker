@@ -91,10 +91,14 @@
                     <div class="library-container">
                         <!-- Kitchen Items -->
                         <div class="library-grid active" id="lib-kitchen">
-                            <button class="lib-item" data-type="sink_base" data-category="kitchen">
-                                <i data-lucide="layers"></i>
-                                <span>싱크대 (하부)</span>
-                            </button>
+                            <button class="lib-item" data-type="sink_base" data-category="kitchen"><i data-lucide="droplets"></i><span>하부장·싱크볼</span></button>
+                            <button class="lib-item" data-type="sink_base_plain" data-category="kitchen"><i data-lucide="square"></i><span>하부장·기본장</span></button>
+                            <button class="lib-item" data-type="sink_base_range" data-category="kitchen"><i data-lucide="flame"></i><span>하부장·가스레인지</span></button>
+                            <button class="lib-item" data-type="sink_base_cooktop" data-category="kitchen"><i data-lucide="circle-dot"></i><span>하부장·쿡탑</span></button>
+                            <button class="lib-item" data-type="sink_base_induction" data-category="kitchen"><i data-lucide="zap"></i><span>하부장·인덕션</span></button>
+                            <button class="lib-item" data-type="sink_base_dishwasher" data-category="kitchen"><i data-lucide="waves"></i><span>식기세척기장</span></button>
+                            <button class="lib-item" data-type="sink_base_washer" data-category="kitchen"><i data-lucide="circle"></i><span>빌트인 세탁기장</span></button>
+                            <button class="lib-item" data-type="sink_base_robot" data-category="kitchen"><i data-lucide="bot"></i><span>로봇청소기장</span></button>
                             <button class="lib-item" data-type="sink_corner" data-category="kitchen">
                                 <i data-lucide="corner-down-right"></i>
                                 <span>싱크대 코너장</span>
@@ -445,6 +449,9 @@
                         <button id="tab-2d-elevation" class="tab-btn">
                             <i data-lucide="table-properties"></i> 2D 입면도 (Elevation)
                         </button>
+                        <button id="tab-wireframe" class="tab-btn">
+                            <i data-lucide="scan-line"></i> 2D 와이어프레임
+                        </button>
                         <button id="tab-3d" class="tab-btn">
                             <i data-lucide="box"></i> 3D 입체도 (3D View)
                         </button>
@@ -488,9 +495,47 @@
                     <!-- 3D Viewport Three.js -->
                     <div class="viewport-wrapper" id="wrapper-3d">
                         <div id="canvas-3d-container"></div>
+                        <div id="wireframe-toolbar" class="wireframe-toolbar">
+                            <div class="wire-toolbar-head">
+                                <div class="wireframe-title"><i data-lucide="scan-line"></i><strong>2D 와이어프레임 출력 설정</strong></div>
+                                <button id="btn-wire-toolbar-toggle" class="wire-toolbar-toggle" title="출력 설정 접기"><span>설정 접기</span> ▲</button>
+                            </div>
+                            <div id="wire-toolbar-body" class="wire-toolbar-body">
+                            <div class="wire-angle-presets">
+                                <button class="wire-angle-btn" data-angle="0">정면 0°</button>
+                                <button class="wire-angle-btn" data-angle="30">우측 30°</button>
+                                <button class="wire-angle-btn" data-angle="45">우측 45°</button>
+                                <button class="wire-angle-btn" data-angle="-30">좌측 30°</button>
+                                <button class="wire-angle-btn" data-angle="-45">좌측 45°</button>
+                                <button class="wire-angle-btn" data-angle="90">측면 90°</button>
+                            </div>
+                            <div class="wire-angle-control">
+                                <button id="btn-wire-angle-minus" title="1도 감소">−</button>
+                                <input id="wire-angle-range" type="range" min="-180" max="180" step="1" value="30">
+                                <input id="wire-angle-number" type="number" min="-180" max="180" step="1" value="30">
+                                <span>°</span>
+                                <button id="btn-wire-angle-plus" title="1도 증가">＋</button>
+                                <button id="btn-wire-fit" class="wire-fit-btn"><i data-lucide="maximize"></i> 화면 맞춤</button>
+                            </div>
+                            <div class="wire-dimension-options">
+                                <label class="wire-check-main"><input id="wire-dim-enabled" type="checkbox"> 치수 표시</label>
+                                <label>글자 크기 <input id="wire-dim-font" type="number" min="10" max="48" step="1" value="18"> px</label>
+                                <label><input id="wire-dim-width" type="checkbox" checked> 폭</label>
+                                <label><input id="wire-dim-height" type="checkbox" checked> 높이</label>
+                                <label><input id="wire-dim-depth" type="checkbox" checked> 깊이</label>
+                                <label><input id="wire-dim-support" type="checkbox" checked> 걸레받이/다릿발</label>
+                                <label><input id="wire-dim-molding" type="checkbox" checked> 천장 마감</label>
+                                <span class="wire-pan-help">우클릭 드래그: 도면 전체 이동 · 휠: 확대/축소</span>
+                            </div>
+                            </div>
+                        </div>
+                        <div id="wire-dimension-layer" class="wire-dimension-layer"></div>
                         <div class="three-controls-guide">
                             <i data-lucide="mouse"></i> 가구 드래그: 이동 | 빈 공간 드래그: 회전 | 우클릭: 화면 이동 | 휠: 줌
                             <div class="three-options">
+                                <button id="btn-3d-fit" class="three-opt-btn" title="가구 전체 화면 맞춤">
+                                    <i data-lucide="maximize"></i> 화면 맞춤
+                                </button>
                                 <button id="btn-3d-lock-rotate" class="three-opt-btn" title="3D 회전 잠금">
                                     <i data-lucide="lock"></i> 회전 잠금
                                 </button>
@@ -593,7 +638,7 @@
             </div>
         </div>
         <div id="print-view-pages" class="print-view-pages"></div>
-        <div class="print-footer">
+        <div class="print-footer print-table-section" id="print-table-section">
             <div class="print-table-title">배치 가구 목록 명세</div>
             <table class="print-table" id="print-cabinet-table">
                 <thead>
@@ -630,6 +675,7 @@
                         <label><input type="checkbox" id="print-check-plan" checked> 2D 평면도</label>
                         <label><input type="checkbox" id="print-check-elevation" checked> 2D 입면·제작도</label>
                         <label><input type="checkbox" id="print-check-3d" checked> 3D 입체도</label>
+                        <label class="print-table-toggle"><input type="checkbox" id="print-check-table"> 가구 목록표 별도 출력</label>
                     </div>
                 </div>
                 <div class="modal-actions">
@@ -651,7 +697,7 @@
                         </div>
                     </div>
                     <div id="preview-view-pages" class="preview-view-pages"></div>
-                    <div class="print-footer">
+                    <div class="print-footer print-table-section" id="preview-table-section">
                         <div class="print-table-title">배치 가구 목록 명세</div>
                         <table class="print-table" id="preview-cabinet-table">
                             <thead>
