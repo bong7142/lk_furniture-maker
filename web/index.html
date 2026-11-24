@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' file: data: blob:; img-src 'self' file: data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' file: data:; script-src 'self' file: 'unsafe-inline'">
-<title>LK 퍼니쳐 (웹판 1.1.8)</title>
+<title>LK 퍼니쳐 (웹판 1.1.9)</title>
 <style>/* LK 퍼니쳐 — 밝은 작업대 + 청사진 파랑 + 선택 주황 */
 :root {
   --bg: #EEF1F5;
@@ -620,6 +620,8 @@ body.easy .adv { display: none !important; }
 #canvas .hit.mv-tgt { fill: rgba(242, 140, 40, .22) !important; stroke: #F28C28; stroke-width: 8; }
 .mv-tip { position: fixed; z-index: 90; pointer-events: none; background: #1B2230; color: #fff; font-size: 12.5px; padding: 5px 9px; border-radius: 7px; box-shadow: 0 6px 18px -6px rgba(0,0,0,.4); }
 .mv-tip.bad { background: #8A93A3; }
+.fit-list { margin: 8px 0 4px; padding-left: 18px; font-size: 13.5px; line-height: 1.7; }
+.fit-list li.warn { color: #B45309; }
 </style>
 </head>
 <body>
@@ -1660,6 +1662,34 @@ body.easy .adv { display: none !important; }
   // RES: 행 → 양 끝에서 상대 면 코너장이 차지하는 자리 / CINFO: 코너 칸 → 계산값
   const RES = new WeakMap(), CINFO = new WeakMap(); let DOOR_T = 18;
   function cornerSide(row, m) { const i = row.modules.indexOf(m); return (i === 0 && row.modules.length > 1) ? 'L' : 'R'; }
+  // ---- 실측 장애물 (창문·기둥·돌출벽) 이 면에 해당하는 것 ----
+  // o.wall: 'A'·'B'·'C' (ㄱ자·ㄷ자) — 없으면 A면(또는 일자). 꺾이는 코너 기둥은 옆 면에도 (폭↔깊이 바꿔서) 나타남
+  const COL_T = ['기둥', '돌출벽'];
+  const wallOf = (f) => f.group ? f.group.wall : 'A';
+  function obsFor(project, f) {
+    const sp = project.spaces && project.spaces.find(q => q.id === f.spaceId);
+    if (!sp || !sp.obstacles) return [];
+    const mine = sp.obstacles.filter(o => (o.wall || 'A') === wallOf(f) || (!f.group && !o.wall) || (!f.group && o.wall === 'A')).map(o => Object.assign({}, o, { x: +o.x || 0, y: +o.y || 0, w: +o.w || 0, h: +o.h || 0, d: +o.d || 0 }));
+    if (!f.group || !f.joins) return mine;
+    const byId = new Map(project.furniture.map(q => [q.id, q]));
+    for (const side of ['L', 'R']) {
+      const j = f.joins[side]; const n = j && byId.get(j.to); if (!n) continue;
+      for (const o of sp.obstacles) {
+        if ((o.wall || 'A') !== wallOf(n) || !COL_T.includes(o.type) || !(+o.d > 0)) continue;
+        const ox = +o.x || 0, ow = +o.w || 0;
+        // 상대 면의 맞닿은 끝(j.end)에 붙은 기둥
+        const atEnd = j.end === 'R' ? ox + ow >= n.width - 20 : ox <= 20;
+        if (!atEnd) continue;
+        const along = +o.d, out = ow;
+        mine.push(Object.assign({}, o, { x: side === 'L' ? 0 : f.width - along, w: along, d: out, derived: true }));
+      }
+    }
+    return mine;
+  }
+  const rowBand = (row) => row.kind === 'upper' ? [row.y, row.y + row.height] : [0, (row.y || 0) + row.height + (row.topT || 0) + (row.topGap || 0)];
+  const overlapsV = (o, row) => { const [a, b] = rowBand(row); const oy = o.y || 0, oh = o.h > 0 ? o.h : 99999; return oy < b - 1 && oy + oh > a + 1; };
+  const colsFor = (project, f, row) => obsFor(project, f).filter(o => COL_T.includes(o.type) && o.d > 0 && o.w > 0 && overlapsV(o, row));
+
   function resolveCorners(project, S) {
     // WeakMap은 비우지 않음: 미리보기 그림(다른 프로젝트) 계산이 실제 가구 값을 지우지 않게
     DOOR_T = S.doorT || 18;
@@ -1672,7 +1702,7 @@ body.easy .adv { display: none !important; }
           if (m.kind !== 'corner') continue;
           const side = cornerSide(r, m);
           const j = f.joins && f.joins[side];
-          const partner = j && ownK(j, r.kind) ? byId.get(j.to) : null;
+          const partner = j && ownK(j, r.kind) && !colK(j, r.kind) ? byId.get(j.to) : null;
           const pr = partner ? partner.rows.find(x => x.kind === r.kind && !x.back) : null;
           const info = { side, partner: partner ? partner.name : null, partnerWall: partner && partner.group ? partner.group.wall + '면' : null };
           if (m.ctype === 'penta') {
@@ -1698,15 +1728,19 @@ body.easy .adv { display: none !important; }
       const j = f.joins[side]; if (!j) continue;
       const partner = byId.get(j.to); if (!partner) continue;
       for (const r of f.rows) {
-        if (r.back || !ownK(j, r.kind)) continue;
+        if (r.back) continue;
+        if (colK(j, r.kind)) { if (!RES.get(r)[side]) RES.get(r)[side] = { w: colK(j, r.kind), type: 'col', owner: '기둥', ownerWall: '기둥', ownerDepth: 0, ownerOverhang: 0, mungB: 0 }; continue; }
+        if (!ownK(j, r.kind)) continue;
         const pr = partner.rows.find(x => x.kind === r.kind && !x.back);
-        if (!pr || RES.get(pr)[j.end]) continue;
+        if (!pr || RES.get(pr)[j.end] || colK(j, pr.kind)) continue;
         RES.get(pr)[j.end] = { w: r.depth + DOOR_T, type: 'butt', owner: f.name, ownerWall: f.group ? f.group.wall + '면' : '', ownerDepth: r.depth, ownerOverhang: r.overhang || 0, mungB: 0 };
       }
     }
   }
   const cornerInfo = (m) => CINFO.get(m) || null;
   // 코너 주인 (하부·상부 따로): own = 하부(기본), ownU = 상부 (없으면 하부와 같음)
+  // 꺾이는 코너에 큰 기둥: j.col = { base, upper, tall } (이 면 쪽 기둥 폭) — 코너장 없이 두 면 다 기둥 옆에서 시작
+  function colK(j, kind) { return j && j.col ? (+j.col[kind] || 0) : 0; }
   function ownK(j, kind) { return !!(j && (kind === 'upper' && j.ownU != null ? j.ownU : j.own)); }
   const isPlainMod = (m) => m.kind !== 'corner' && !m.sink && !m.cook && !m.faucet && !m.water && !m.appl && !m.acc && !(m.label && /싱크|쿡탑|가스|인덕션/.test(m.label));
   // 자동 칸 개수 다시 맞추기: 칸 하나가 대략 unit(기본 600) 안팎이 되게
@@ -2032,7 +2066,7 @@ body.easy .adv { display: none !important; }
           const pn = () => `${no}-${String(++seq).padStart(2, '0')}`;
           const AP = m.kind === 'appl' ? APPL[m.appl] : null;
           if (m.kind === 'gap' || (m.kind === 'appl' && (!AP || AP.mode !== 'housing'))) {
-            const onFloor = (AP && AP.floor && ph > 0) || (m.kind === 'gap' && m.knee);   // 바닥에 바로 서는 가전·무릎 공간: 걸레받이 없음
+            const onFloor = (AP && AP.floor && ph > 0) || (m.kind === 'gap' && (m.knee || m.col));   // 바닥에 바로 서는 가전·무릎 공간: 걸레받이 없음
             if (onFloor) kickSkip.push([x, x + W]);
             geo.push({ f: f.id, m: m.id, type: 'gap', x, y: onFloor ? 0 : y0, z: 0, w: W, h: onFloor ? H + ph : H, d: D, appl: AP ? AP.id : null, face: AP ? AP.face : null });
             if (AP && AP.panel) add({ no: pn(), name: `${AP.name} 도어 패널`, w: Math.min(594, W - S.doorGap), h: H - S.doorGap, t: DT, mat: S.doorMaterial, grain: 'h', edge: '4면', edgeLen: 2 * (594 + H) });
@@ -2524,6 +2558,18 @@ body.easy .adv { display: none !important; }
           const dz = row.depth - cellD(cell.m);
           if (dz > 0) for (let i = s0; i < geo.length; i++) geo[i].z += dz;
         });
+        // 창문을 가리는 칸 알림 (자동으로 빼지 않음)
+        if (row.kind !== 'base' && !row.back) for (const o of obsFor(project, f).filter(o => o.type === '창문' && o.w > 0 && o.h > 0)) {
+          for (const c of lay.cells) {
+            if (c.m.kind === 'gap' || c.x + c.w <= o.x + 1 || c.x >= o.x + o.w - 1) continue;
+            const y1 = row.kind === 'upper' ? row.y : 0, y2 = row.y + row.height;
+            const ov = Math.min(y2, o.y + o.h) - Math.max(y1, o.y);
+            if (ov <= 0) continue;
+            const ovx = Math.min(c.x + c.w, o.x + o.w) - Math.max(c.x, o.x);
+            const cur = geo.find(g => g.m === c.m.id && g.type === 'body');
+            warnings.push(`${f.name} ${cur ? cur.no : ''} ${row.label}이(가) 창문을 가려요 (가로 ${Math.round(ovx)} × 세로 ${Math.round(ov)}mm)`);
+          }
+        }
 
         // ---- 슬라이딩 문 (키큰장 줄 전체에 큰 문) ----
         if (row.kind === 'tall' && row.doorType === 'slide') {
@@ -2545,7 +2591,7 @@ body.easy .adv { display: none !important; }
         }
         // ---- 행 공통: 상대 면 코너 자리, 측면 마감판, 걸레받이·좌대, 상판, 몰딩 ----
         const resGeo = (res, end) => {
-          if (!res) return;
+          if (!res || res.type === 'col') return;
           const gx = end === 'L' ? sp.off : sp.off + row.width - res.w;
           geo.push({ f: f.id, type: 'ghost', x: gx, y: y0, z: 0, w: res.w, h: H, d: D, end, res: res.type, label: res.type === 'penta' ? `${res.ownerWall} 오각장` : res.type === 'blind' ? `${res.ownerWall} 코너장` : `${res.ownerWall} 장`, mungB: res.mungB });
           if (res.mungB > 0) {
@@ -2581,7 +2627,7 @@ body.easy .adv { display: none !important; }
         }
         // 걸레받이 구간: 칸이 놓인 곳 + 상대 면 쪽으로 연장
         if (ph > 0 && (sup === 'plinth' || (sup === 'legs' && !row.kickOff))) {
-          const extOf = (res) => !res || res.type === 'penta' ? 0 : Math.max(0, res.w - (res.ownerDepth - sb));
+          const extOf = (res) => !res || res.type === 'penta' || res.type === 'col' ? 0 : Math.max(0, res.w - (res.ownerDepth - sb));
           let k0 = sp.start - extOf(sp.resL), k1 = sp.start + sp.width + extOf(sp.resR);
           // 코너장(멍장)을 가진 면: 상대 면 장 밑으로 들어가는 걸레받이는 상대 걸레받이 앞면까지만
           for (const cm of [row.modules[0], row.modules[row.modules.length - 1]]) {
@@ -2609,7 +2655,7 @@ body.easy .adv { display: none !important; }
           }
         }
         if ((row.topT || 0) > 0 && !row.back) {
-          const extT = (res) => !res ? 0 : res.w - (res.ownerDepth + res.ownerOverhang);
+          const extT = (res) => !res || res.type === 'col' ? 0 : res.w - (res.ownerDepth + res.ownerOverhang);
           const a = sp.start - sp.el - extT(sp.resL), b = sp.start + sp.width + sp.er + extT(sp.resR);
           // 상판 돌출: f.topOver = { back:{on,d,from,to}, L:{on,d}, R:{on,d} } — 끝 돌출은 이어지지 않은 끝만
           const TO = f.topOver || {};
@@ -2621,8 +2667,25 @@ body.easy .adv { display: none !important; }
           const a2 = a - eL, b2 = b + eR;
           const full = !bkRow || bkRow.width >= row.width - 1;
           const d0 = D + (row.overhang || 0) - (full ? zb : 0), z0t = full ? zb : 0;
-          countertops.push({ f: f.id, fname: f.name, w: Math.round(b2 - a2), d: Math.round(d0), t: row.topT, mat: row.topMat || 'artificial' });
-          geo.push({ f: f.id, type: 'top', x: a2, y: y0 + H, z: z0t, w: b2 - a2, h: row.topT, d: d0, mat: row.topMat || 'artificial' });
+          // 기둥: 깊은 기둥 자리는 상판을 끊고, 얕은 기둥 앞 칸은 상판 뒤를 따냄
+          const cellsT = lay.cells;
+          const cuts = cellsT.filter(c => c.m.kind === 'gap' && c.m.col).map(c => [c.x, c.x + c.w]);
+          const notches = cellsT.filter(c => c.m.colNotch > 0).map(c => [c.x, c.x + c.w, +c.m.colNotch]);
+          let pieces = [[a2, b2]];
+          for (const [ca, cb] of cuts) pieces = pieces.flatMap(([p, q]) => (cb <= p || ca >= q) ? [[p, q]] : [[p, ca], [cb, q]].filter(([u, v]) => v - u > 1));
+          pieces.forEach(([pa, pb], pi) => {
+            const nt = notches.filter(([na, nb]) => na < pb && nb > pa);
+            const nm = pieces.length > 1 ? `${f.name} (${pi + 1}/${pieces.length})` : f.name;
+            countertops.push({ f: f.id, fname: nt.length ? `${nm} · 기둥 따내기 ${nt.map(([na, nb, nd]) => `${Math.round(nb - na)}×${nd}`).join(', ')}` : nm, w: Math.round(pb - pa), d: Math.round(d0), t: row.topT, mat: row.topMat || 'artificial' });
+            // 3D: 따낸 부분은 뒤를 비움
+            let xs = [pa]; for (const [na, nb] of nt) xs.push(Math.max(pa, na), Math.min(pb, nb)); xs.push(pb); xs = [...new Set(xs)].sort((u, v) => u - v);
+            for (let k = 0; k < xs.length - 1; k++) {
+              const u = xs[k], v = xs[k + 1]; if (v - u < 0.5) continue;
+              const n0 = nt.find(([na, nb]) => na <= u + 0.1 && nb >= v - 0.1);
+              const cut = n0 ? n0[2] : 0;
+              geo.push({ f: f.id, type: 'top', x: u, y: y0 + H, z: z0t + cut, w: v - u, h: row.topT, d: d0 - cut, mat: row.topMat || 'artificial' });
+            }
+          });
           if (!full) {
             // 뒤쪽 장이 짧으면(반도형 옆 냉장고장) 그 위만 상판을 뒤로
             const bx0 = f.width - (bkRow.offset || 0) - bkRow.width, bx1 = f.width - (bkRow.offset || 0);
@@ -2930,7 +2993,7 @@ body.easy .adv { display: none !important; }
     };
   }
 
-  return { uid, clamp, TYPES, LIBRARY, APPLIANCES, APPL, topFixtures, moduleFromLibrary, HANDLE_TYPES, HANDLE, TOP_MATS, endSpec, ACC_NAMES, DOOR_STYLES, SEC_TYPES, secLayout, splitBoxes, ledSpec, applyCeilFinish, drawerSections, bayWidths, bayCfg, hingeYs, MODULE_KINDS, defaultSettings, createFurniture, createKitchen, groupWalls, wallFrames, flipBack, addIslandBack, removeIslandBack, setIslandDepth, hasBack, isFree, wallPos, wallLabel, isPen, penAt, setCornerOwner, addTallEnd, removeTallEnd, setPen, rebalanceRow, unitOf, ownK, toWorld, toWorldPt, resolveCorners, cornerInfo, cornerSide, rowSpan, newModule, layoutRow, furnitureHeight, backMode, computeParts, optimize, quote, cutList, newProject };
+  return { obsFor, colsFor, rowBand, COL_T, uid, clamp, TYPES, LIBRARY, APPLIANCES, APPL, topFixtures, moduleFromLibrary, HANDLE_TYPES, HANDLE, TOP_MATS, endSpec, ACC_NAMES, DOOR_STYLES, SEC_TYPES, secLayout, splitBoxes, ledSpec, applyCeilFinish, drawerSections, bayWidths, bayCfg, hingeYs, MODULE_KINDS, defaultSettings, createFurniture, createKitchen, groupWalls, wallFrames, flipBack, addIslandBack, removeIslandBack, setIslandDepth, hasBack, isFree, wallPos, wallLabel, isPen, penAt, setCornerOwner, addTallEnd, removeTallEnd, setPen, rebalanceRow, unitOf, ownK, toWorld, toWorldPt, resolveCorners, cornerInfo, cornerSide, rowSpan, newModule, layoutRow, furnitureHeight, backMode, computeParts, optimize, quote, cutList, newProject };
 });
 </script>
 <script>/* LK 퍼니쳐 — 마감재 견본 (문·EP·몸통·상판·걸레받이)
@@ -3323,7 +3386,7 @@ ${ed ? `<rect class="ed-hit" x="${(x1 + x2) / 2 - fs * 1.6}" y="${y - fs * (smal
     if (ceiling && !opts.bare) out.push(`<line x1="${floorL}" y1="${Y(ceiling)}" x2="${floorR}" y2="${Y(ceiling)}" stroke="${LIGHT}" stroke-width="${sw}" stroke-dasharray="${fs * 0.6} ${fs * 0.3}"/><text x="${floorR}" y="${Y(ceiling) - fs * 0.3}" font-size="${fs * 0.7}" text-anchor="end" fill="${HID}">천장 ${ceiling}</text>`);
 
     // 장애물 (실측)
-    if (space && space.obstacles && !opts.bare) for (const o of space.obstacles) {
+    if (space && space.obstacles && !opts.bare) for (const o of (space.id && E.obsFor ? E.obsFor(project, f) : space.obstacles)) {
       out.push(rect(o.x, o.y, o.w, o.h, { stroke: OBS, hidden: true, wmul: 1.2 }));
       out.push(`<text x="${n1(o.x + o.w / 2)}" y="${n1(Y(o.y + o.h / 2) + fs * 0.35)}" font-size="${fs * 0.8}" text-anchor="middle" fill="${OBS}">${esc(o.type)}</text>`);
     }
@@ -3805,7 +3868,7 @@ ${ed ? `<rect class="ed-hit" x="${(x1 + x2) / 2 - fs * 1.6}" y="${y - fs * (smal
         const wx0 = w.joins && w.joins.L ? -(w.joins.L.depth || 0) : -60;
         const wsol = addSolid(rectPoly(T, Math.min(0, wx0), -25, w.width + 60 - Math.min(0, wx0), 25), 0, ceil, { t: 'wall', T, wall: w });
         wsol.lineOnly = true;
-        for (const o of (sp && sp.obstacles) || []) {
+        for (const o of (sp && sp.obstacles ? E.obsFor(project, w).filter(o => !o.derived) : [])) {
           if (o.type === '창문' || o.type === '출입문') {
             const zf = 1, fr = 50;
             const R4 = (x0, y0, x1, y1) => [W3(T, x0, y0, zf), W3(T, x1, y0, zf), W3(T, x1, y1, zf), W3(T, x0, y1, zf), W3(T, x0, y0, zf)];
@@ -3816,7 +3879,7 @@ ${ed ? `<rect class="ed-hit" x="${(x1 + x2) / 2 - fs * 1.6}" y="${y - fs * (smal
               wsol.over.push({ kind: 'line', pts: [W3(T, mx, o.y + fr, zf), W3(T, mx, o.y + o.h - fr, zf)], sw: 0.9 });
               for (const cx of [o.x + o.w * 0.25, o.x + o.w * 0.75]) wsol.over.push({ kind: 'line', pts: [W3(T, cx - o.w * 0.06, o.y + o.h * 0.4, zf), W3(T, cx + o.w * 0.06, o.y + o.h * 0.6, zf)], sw: 0.8 });
             } else wsol.over.push({ kind: 'line', pts: [W3(T, o.x + o.w - fr - 60, o.y + o.h * 0.45, zf), W3(T, o.x + o.w - fr - 60, o.y + o.h * 0.55, zf)], sw: 1.4 });
-          } else if (o.type === '기둥' || o.type === '보') {
+          } else if (['기둥', '돌출벽', '보'].includes(o.type)) {
             addSolid(rectPoly(T, o.x, 0, o.w, +o.d || 300), o.y || 0, (o.y || 0) + o.h, { t: 'wall', T, wall: w }).lineOnly = true;
           }
         }
@@ -4195,6 +4258,13 @@ ${ed ? `<rect class="ed-hit" x="${(x1 + x2) / 2 - fs * 1.6}" y="${y - fs * (smal
       const HI = opts.hi && opts.hi === w.id;
       out.push(`<g class="pw" data-fid="${w.id}">`);
       if (!E.isFree(w)) out.push(poly([P(T, 0, 0), P(T, w.width, 0), P(T, w.width + (w.joins && w.joins.R && !penN('R') ? WALL_T : 0), -WALL_T), P(T, (w.joins && w.joins.L && !penN('L') ? -WALL_T : 0), -WALL_T)], { fill: HI ? '#2F6FB0' : '#D9DEE6', stroke: INK, wmul: 1.2 }));
+      // 기둥·돌출벽 (실측)
+      if (!opts.mini) for (const o of E.obsFor(project, w).filter(o => E.COL_T.includes(o.type) && o.d > 0 && !o.derived)) {
+        const ps = [P(T, o.x, 0), P(T, o.x + o.w, 0), P(T, o.x + o.w, o.d), P(T, o.x, o.d)];
+        out.push(poly(ps, { fill: '#FDE2E1', stroke: '#C2410C', wmul: 1.1 }));
+        const c = ps.reduce((a, p) => [a[0] + p[0] / 4, a[1] + p[1] / 4], [0, 0]);
+        labels.push(`<text x="${n1(c[0])}" y="${n1(c[1] + fs * 0.25)}" font-size="${fs * 0.6}" text-anchor="middle" fill="#C2410C">${esc(o.type)}</text>`);
+      }
       // 상판
       for (const tp of items.filter(g => g.type === 'top')) { const z0 = tp.z || 0; out.push(poly([P(T, tp.x, z0), P(T, tp.x + tp.w, z0), P(T, tp.x + tp.w, z0 + tp.d), P(T, tp.x, z0 + tp.d)], { fill: '#F1F3F6', stroke: LIGHT })); }
       // EP·뒷면 마감판
@@ -4210,7 +4280,8 @@ ${ed ? `<rect class="ed-hit" x="${(x1 + x2) / 2 - fs * 1.6}" y="${y - fs * (smal
           const hz = [P(T, b.x, 0), P(T, b.x + b.w, 0), P(T, b.x + b.w, b.shallow), P(T, b.x, b.shallow)];
           out.push(poly(hz, { dash: true, stroke: '#B7791F', fill: up ? 'none' : '#FEF3C7' }));
           const c2 = hz.reduce((a, p) => [a[0] + p[0] / 4, a[1] + p[1] / 4], [0, 0]);
-          if (!up) labels.push(`<text x="${n1(c2[0])}" y="${n1(c2[1] + fs * 0.25)}" font-size="${Math.min(fs * 0.6, b.shallow * 0.7)}" text-anchor="middle" fill="#B7791F">벽 띄움 ${b.shallow}</text>`);
+          const colHere = E.obsFor(project, w).some(o => E.COL_T.includes(o.type) && o.x < b.x + b.w && o.x + o.w > b.x);
+          if (!up && !colHere) labels.push(`<text x="${n1(c2[0])}" y="${n1(c2[1] + fs * 0.25)}" font-size="${Math.min(fs * 0.6, b.shallow * 0.7)}" text-anchor="middle" fill="#B7791F">벽 띄움 ${b.shallow}</text>`);
         }
         out.push(poly(ps, { dash: up || b.type === 'gap', stroke: up ? HID : INK, wmul: up ? 0.9 : 1.2, fill: up ? 'none' : (b.type === 'gap' ? 'none' : HI ? '#DCE9F8' : '#fff') }));
         if (!up && b.no && !opts.mini) {
@@ -4590,8 +4661,8 @@ function renderAll() {
 }
 
 // ================= 1. 현장·실측 =================
-const OBS_TYPES = ['창문', '출입문', '기둥', '보', '배관', '콘센트', '스위치', '몰딩', '분전함', '기타'];
-const OBS_DEF = { 창문: { y: 1000, w: 1200, h: 1000 }, 출입문: { y: 0, w: 900, h: 2100 }, 기둥: { y: 0, w: 400, h: 2400, d: 300 }, 보: { y: 2200, w: 3000, h: 200, d: 300 } };
+const OBS_TYPES = ['창문', '출입문', '기둥', '돌출벽', '보', '배관', '콘센트', '스위치', '몰딩', '분전함', '기타'];
+const OBS_DEF = { 창문: { y: 1000, w: 1200, h: 1000 }, 출입문: { y: 0, w: 900, h: 2100 }, 기둥: { y: 0, w: 400, h: 2400, d: 300 }, 돌출벽: { y: 0, w: 600, h: 2400, d: 150 }, 보: { y: 2200, w: 3000, h: 200, d: 300 } };
 function renderSite() {
   $$('[data-site]').forEach(el => { el.value = P().site[el.dataset.site] || ''; });
   const box = $('#spaces');
@@ -4599,13 +4670,15 @@ function renderSite() {
   P().spaces.forEach((sp, i) => {
     const el = document.createElement('div');
     el.className = 'space';
+    const gw = P().furniture.filter(f => f.spaceId === sp.id && f.group).map(f => f.group.wall);
+    const wallsL = [...new Set(gw)].sort();
     el.innerHTML = `<div class="space-head">
       <label class="nm">공간 이름<input data-k="name"></label>
       <label>벽 길이 (mm)<input type="number" data-k="width" step="10"></label>
       <label>천장 높이 (mm)<input type="number" data-k="height" step="10"></label>
       <button class="btn small danger" data-act="del" ${P().spaces.length < 2 ? 'disabled' : ''}>삭제</button></div>
-      <div class="obs"><table><thead><tr><th>창문·문·기둥·장애물</th><th>왼쪽 끝에서</th><th>바닥에서</th><th>폭</th><th>높이</th><th>깊이</th><th></th></tr></thead><tbody></tbody></table>
-      <button class="btn small" data-act="obs">+ 창문·문·기둥·배관 등 추가</button> <span class="hint">창문·출입문·기둥은 입체도·3D에도 그려져요</span></div>`;
+      <div class="obs"><table><thead><tr><th>창문·문·기둥·장애물</th>${wallsL.length ? '<th>벽</th>' : ''}<th>왼쪽 끝에서</th><th>바닥에서</th><th>폭</th><th>높이</th><th>깊이</th><th></th></tr></thead><tbody></tbody></table>
+      <button class="btn small" data-act="obs">+ 창문·문·기둥·배관 등 추가</button> <span class="hint">기둥·돌출벽은 장이 피하고, 창문은 가리면 알려줘요${wallsL.length ? ' · ㄱ자·ㄷ자는 어느 벽(면)인지 골라요. 코너 기둥은 한 면에만 넣으면 옆 면에도 들어가요' : ''}</span></div>`;
     $$('[data-k]', el).forEach(inp => {
       inp.value = sp[inp.dataset.k];
       inp.addEventListener('change', () => { sp[inp.dataset.k] = inp.type === 'number' ? +inp.value : inp.value; commit(); });
@@ -4618,8 +4691,9 @@ function renderSite() {
     const tb = $('tbody', el);
     sp.obstacles.forEach((o, oi) => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td><select>${OBS_TYPES.map(t => `<option ${t === o.type ? 'selected' : ''}>${t}</option>`).join('')}</select></td>
-        ${['x', 'y', 'w', 'h'].map(k => `<td><input type="number" step="10" data-o="${k}" value="${o[k]}"></td>`).join('')}<td>${o.type === '기둥' || o.type === '보' ? `<input type="number" step="10" data-o="d" value="${o.d || 300}">` : ''}</td><td><button class="btn small danger">×</button></td>`;
+      tr.innerHTML = `<td><select>${OBS_TYPES.map(t => `<option ${t === o.type ? 'selected' : ''}>${t}</option>`).join('')}</select></td>${wallsL.length ? `<td><select class="ow">${wallsL.map(L => `<option value="${L}" ${(o.wall || 'A') === L ? 'selected' : ''}>${L}면</option>`).join('')}</select></td>` : ''}
+        ${['x', 'y', 'w', 'h'].map(k => `<td><input type="number" step="10" data-o="${k}" value="${o[k]}"></td>`).join('')}<td>${['기둥', '돌출벽', '보'].includes(o.type) ? `<input type="number" step="10" data-o="d" value="${o.d || 300}">` : ''}</td><td><button class="btn small danger">×</button></td>`;
+      { const ow = $('select.ow', tr); if (ow) ow.onchange = () => { o.wall = ow.value; commit(); }; }
       $('select', tr).onchange = (e) => { const d = OBS_DEF[e.target.value]; o.type = e.target.value; if (d) Object.assign(o, d); commit(); renderSite(); };
       $$('[data-o]', tr).forEach(inp => inp.onchange = () => { o[inp.dataset.o] = +inp.value; commit(); });
       $('button', tr).onclick = () => { sp.obstacles.splice(oi, 1); commit(); renderSite(); };
@@ -5160,9 +5234,9 @@ function renderCanvas() {
           room[room.length - 1].tile = { y0, y1, len, cx: (a[0] + b[0]) / 2, cz: (a[1] + b[1]) / 2, rotY: -Math.atan2(b[1] - a[1], b[0] - a[0]) };
         }
       }
-      for (const o of (sp && sp.obstacles) || []) {
+      for (const o of (sp && sp.obstacles ? E.obsFor(P(), w).filter(o => !o.derived) : [])) {
         if (o.type === '창문' || o.type === '출입문') room.push(Object.assign(W({ type: 'opening', x: o.x, y: o.y || 0, z: -30, w: o.w, h: o.h, d: 34 }, w), { kind: o.type }));
-        else if (o.type === '기둥' || o.type === '보') room.push(W({ type: 'col', x: o.x, y: o.y || 0, z: 0, w: o.w, h: o.h, d: +o.d || 300 }, w));
+        else if (['기둥', '돌출벽', '보'].includes(o.type)) room.push(W({ type: 'col', x: o.x, y: o.y || 0, z: 0, w: o.w, h: o.h, d: +o.d || 300 }, w));
       }
       // 상판 위 기구
       const T = many ? fr.get(w.id) : null;
@@ -5865,6 +5939,9 @@ function inspectFurniture(box, f) {
       b.onclick = () => openFinPicker(k, nm, fin[k] || {}, (val) => { const ws = f.group ? E.groupWalls(P(), f) : [f]; for (const w of ws) { w.finish = w.finish || {}; if (val === null) delete w.finish[k]; else w.finish[k] = Object.assign({}, val); } changed(); });
       fw.appendChild(r);
     }
+    { const sp0 = P().spaces.find(q => q.id === f.spaceId); const nObs = sp0 ? (sp0.obstacles || []).filter(o => E.COL_T.includes(o.type) || o.type === '창문').length : 0;
+      const fb = document.createElement('div'); fb.innerHTML = `<button class="btn">창문·기둥 맞춰 다시 배치</button>`; $('button', fb).onclick = () => runFit(f);
+      box.appendChild(prop('창문·기둥', fb, nObs ? `이 공간에 창문·기둥 ${nObs}개 · 기둥은 피하고, 창문은 가리면 알려줘요` : '현장·실측에서 창문·기둥·돌출벽을 넣으면 피해서 배치해요')); }
     box.appendChild(prop('마감재 (투톤)', fw, '한솔·LX·동화 등 자재 견본에서 골라요 · 3D 실사·문짝 발주서·작업지시서에 들어가요'));
   }
   // 천장 마감: 무몰딩 / 몰딩 (상부장·키큰장)
@@ -6350,6 +6427,7 @@ function wizCreate() {
     $('#wizard').hidden = true;
     commit(); go('design');
     toast(`${wiz.shape === 'U' ? 'ㄷ자' : 'ㄱ자'} ${E.TYPES[wiz.type].name}을(를) ${walls.length}면으로 만들었어요. 코너장을 눌러 멍 크기를 바꿀 수 있어요.`);
+    autoFit(own);
     return;
   }
   const f = E.createFurniture(wiz.type, { width: +$('#wizWidth').value, ceiling: +$('#wizCeiling').value, count: wiz.count, withUpper: $('#wizUpper').checked, spaceId, name: $('#wizName').value.trim(), ceilFinish: wizCeil(), support: $('#wizSupWrap').hidden ? undefined : $('#wizSup').value, ...wizIslandOpts() });
@@ -6360,7 +6438,10 @@ function wizCreate() {
   $('#wizard').hidden = true;
   commit(); go('design');
   toast(`${f.name}을(를) 만들었어요. 칸을 눌러 문·서랍을 바꿔보세요.`);
+  autoFit(f);
 }
+// 만들 때 공간에 창문·기둥이 있으면 자동으로 맞춤
+function autoFit(f) { const sp = P().spaces.find(q => q.id === f.spaceId); if (sp && (sp.obstacles || []).some(o => E.COL_T.includes(o.type) || o.type === '창문')) setTimeout(() => runFit(f, true), 50); }
 
 // ================= 인쇄용 HTML =================
 function fontHref() { return new URL('../node_modules/pretendard/dist/web/variable/pretendardvariable.css', location.href).href; }
@@ -7201,6 +7282,128 @@ window.addEventListener('keydown', (e) => {
   if (j < 0 || j >= fm.row.modules.length) return;
   e.preventDefault(); swapModules(f, fm.m.id, fm.row.modules[j].id);
 });
+
+// ---------- 창문·기둥 맞춰 배치 ----------
+// 기둥·돌출벽: 얕으면 그 자리 칸 깊이를 줄여 기둥 앞에(앞면 한 줄), 깊으면 기둥 옆에서 장을 끊음
+// 꺾이는 코너 기둥: 작으면 코너장을 기둥 앞에 두고(뒤 모서리 따냄), 크면 코너장 없이 두 면 다 기둥 옆에서 시작
+// 창문: 자동으로 빼지 않고 가리는 칸만 알려줌
+const MIN_D = (row) => row.kind === 'upper' ? 200 : 300;
+function fitObstacles(f0, quiet) {
+  const walls = f0.group ? E.groupWalls(P(), f0) : [f0];
+  const byId = new Map(P().furniture.map(q => [q.id, q]));
+  const notes = [];
+  // 1) 지난번에 맞춘 것 되돌리기
+  for (const w of walls) {
+    for (const row of w.rows) {
+      row.modules = row.modules.filter(m => !m.colFit);
+      row.modules.forEach(m => { if (m.fitW) { m.auto = true; delete m.fitW; } });
+    }
+    for (const side of ['L', 'R']) {
+      const j = w.joins && w.joins[side]; if (!j || !j.col) continue;
+      for (const [kind, saved] of Object.entries(j.colSaved || {})) {
+        const row = w.rows.find(r => r.kind === kind && !r.back); if (!row || !saved) continue;
+        if (!row.modules.some(m => m.kind === 'corner' && E.cornerSide(row, m) === side)) side === 'L' ? row.modules.unshift(saved) : row.modules.push(saved);
+      }
+      delete j.col; delete j.colSaved;
+    }
+  }
+  E.resolveCorners(P(), S());
+  // 2) 꺾이는 코너 기둥
+  for (const w of walls) for (const side of ['L', 'R']) {
+    const j = w.joins && w.joins[side]; const n = j && byId.get(j.to); if (!n) continue;
+    for (const row of w.rows) {
+      if (row.back || row.kind === 'tall' && !n.rows.some(r => r.kind === 'tall')) { /* 키큰장도 같은 규칙 */ }
+      if (row.back) continue;
+      const cols = E.colsFor(P(), w, row).filter(o => side === 'L' ? o.x <= 20 : o.x + o.w >= w.width - 20);
+      if (!cols.length) continue;
+      const c = cols.reduce((a, b) => (a.w * a.d >= b.w * b.d ? a : b));
+      const pr = n.rows.find(r => r.kind === row.kind && !r.back);
+      const small = c.d <= row.depth - MIN_D(row) && (!pr || c.w <= pr.depth - MIN_D(pr));
+      if (small) { if (!c.derived) notes.push(`${E.wallLabel(w)} ${row.label} 코너: 기둥 ${c.w}×${c.d}이 작아서 코너장을 그대로 두고 뒤 모서리를 따내요`); continue; }
+      // 큰 기둥: 이 면 코너장을 빼고 기둥 옆에서 시작
+      j.col = Object.assign({}, j.col, { [row.kind]: Math.round(c.w) });
+      const ci = row.modules.findIndex(m => m.kind === 'corner' && E.cornerSide(row, m) === side);
+      if (ci >= 0) { j.colSaved = Object.assign({}, j.colSaved, { [row.kind]: row.modules[ci] }); row.modules.splice(ci, 1); }
+      if (!row.modules.length) row.modules.push(E.newModule({ kind: 'door', doors: 2, shelves: 1 }));
+      if (!(c.derived)) notes.push(`${E.wallLabel(w)}·${E.wallLabel(n)} ${row.label} 코너: 기둥이 커서 코너장 없이 두 면 다 기둥 옆에서 시작`);
+    }
+  }
+  E.resolveCorners(P(), S());
+  // 3) 벽 중간(또는 막힌 끝) 기둥
+  for (const w of walls) for (const row of w.rows) {
+    if (row.back) continue;
+    const sp = E.rowSpan(row), s0 = sp.start, s1 = sp.start + sp.width;
+    const atJoin = (o) => (w.joins && w.joins.L && o.x <= 20) || (w.joins && w.joins.R && o.x + o.w >= w.width - 20);   // 꺾이는 코너 기둥은 2)에서 처리
+    const cols = E.colsFor(P(), w, row).filter(o => !atJoin(o))
+      .map(o => ({ o, a: Math.max(s0, o.x), b: Math.min(s1, o.x + o.w) }))
+      .filter(c => c.b - c.a > 5).sort((p, q) => p.a - q.a);
+    if (!cols.length) continue;
+    const isEnd = (m, i) => m.kind === 'corner';
+    const lead = [], tail = [], mids = [];
+    row.modules.forEach((m, i) => { if (m.kind === 'corner') (i === 0 ? lead : tail).push(m); else mids.push(m); });
+    // 구간 나누기
+    const segs = []; let cur = s0;
+    const colMods = [];
+    for (const c of cols) {
+      if (c.a > cur + 0.5) segs.push([cur, c.a]);
+      const cw = Math.round(c.b - c.a), deep = c.o.d > row.depth - MIN_D(row);
+      let cm;
+      if (deep) cm = E.newModule({ kind: 'gap', col: true, label: `${c.o.type} 자리`, auto: false, width: cw });
+      else if (cw < 250) cm = E.newModule({ kind: 'filler', auto: false, width: cw, label: `${c.o.type} 앞 필러`, colNotch: Math.round(c.o.d) });
+      else cm = E.newModule({ kind: 'door', doors: cw >= 500 ? 2 : 1, shelves: row.kind === 'upper' ? 2 : 1, auto: false, width: cw, depth: Math.round(row.depth - c.o.d), label: `${c.o.type} 앞`, colNotch: Math.round(c.o.d) });
+      cm.colFit = true; colMods.push(cm);
+      notes.push(`${E.wallLabel(w)} ${row.label}: ${c.o.type} ${Math.round(c.o.w)}×${c.o.d} → ${deep ? '깊어서 옆으로 피함 (그 자리 비움)' : cw < 250 ? '얕고 좁아서 앞에 필러' : `얕아서 앞에 깊이 ${Math.round(row.depth - c.o.d)} 장`}`);
+      segs.push(null); cur = c.b;
+    }
+    if (s1 > cur + 0.5) segs.push([cur, s1]);
+    // 칸을 구간 길이에 맞게 나눠 담기
+    const real = segs.filter(Boolean), total = real.reduce((a, [p, q]) => a + q - p, 0);
+    const unit = E.unitOf(w, row.kind) || 600;
+    const want = real.map(([p, q]) => q - p < 150 ? 0 : Math.max(1, Math.round((q - p) / unit)));
+    const pool = mids.slice();
+    while (pool.length < want.reduce((a, b) => a + b, 0)) { const t = pool.find(m => m.kind === 'door') || pool[0]; const n2 = E.newModule(Object.assign(JSON.parse(JSON.stringify(t || { kind: 'door', doors: 2 })), { auto: true })); n2.id = E.uid('m'); n2.sink = n2.cook = n2.faucet = n2.water = null; n2.colFit = true; pool.push(n2); }
+    // 칸이 남으면 빈 칸(기구 없는 것)부터 뺌
+    const need = want.reduce((a, b) => a + b, 0);
+    for (let q = pool.length - 1; pool.length > need && q >= 0; q--) { const m = pool[q]; if (!m.sink && !m.cook && !m.faucet && !m.water && m.kind !== 'appl' && m.auto) pool.splice(q, 1); }
+    const out = [...lead]; let k = 0, ri = 0, ci2 = 0;
+    segs.forEach((sg) => {
+      if (!sg) { out.push(colMods[ci2++]); return; }
+      const L = sg[1] - sg[0], nn = want[ri]; const isLast = ri === real.length - 1; ri++;
+      if (nn === 0) { if (L > 0.5) { const fl = E.newModule({ kind: 'filler', auto: false, width: Math.round(L), label: '필러' }); fl.colFit = true; out.push(fl); } return; }
+      const take = isLast ? pool.slice(k) : pool.slice(k, k + nn); k += take.length;
+      if (!isLast) {
+        const fixedSum = take.filter(m => !m.auto).reduce((a, m) => a + m.width, 0);
+        const autos = take.filter(m => m.auto);
+        if (autos.length) { const each = Math.floor((L - fixedSum) / autos.length); let rem = Math.round(L - fixedSum - each * autos.length); autos.forEach(m => { m.auto = false; m.fitW = true; m.width = each + (rem-- > 0 ? 1 : 0); }); }
+        else if (Math.abs(fixedSum - L) > 1) notes.push(`${E.wallLabel(w)} ${row.label}: 기둥 사이 ${Math.round(L)}mm에 고정 폭 칸(${fixedSum})이 안 맞아요 — 폭을 확인하세요`);
+      }
+      out.push(...take);
+    });
+    out.push(...tail);
+    row.modules = out;
+  }
+  // 4) 창문 (알림만)
+  E.resolveCorners(P(), S());
+  const c = E.computeParts(P(), S());
+  const winW = c.warnings.filter(t => /창문을 가려요/.test(t) && walls.some(w => t.startsWith(w.name)));
+  notes.push(...winW.map(t => '⚠ ' + t));
+  return notes;
+}
+function runFit(f, auto) {
+  let notes = [];
+  withDiff('창문·기둥 맞추기', () => { notes = fitObstacles(f); });
+  if (notes.length) showFitNotes(notes); else if (!auto) toast('이 면에 맞출 창문·기둥이 없어요. 현장·실측에서 넣어 주세요.');
+}
+function showFitNotes(notes) {
+  let md = $('#fitModal');
+  if (!md) { md = document.createElement('div'); md.className = 'modal'; md.id = 'fitModal'; md.hidden = true; document.body.appendChild(md); }
+  md.innerHTML = `<div class="modal-card"><div class="wiz-head"><h2>창문·기둥 맞춘 결과</h2><button class="x" data-close>닫기</button></div>
+    <ul class="fit-list">${notes.map(n => `<li class="${n.startsWith('⚠') ? 'warn' : ''}">${esc(n.replace(/^⚠ /, ''))}</li>`).join('')}</ul>
+    <p class="hint">창문은 자동으로 빼지 않아요. 가리는 칸은 직접 바꾸거나 그대로 두세요. 되돌리기: Ctrl+Z</p></div>`;
+  $('[data-close]', md).onclick = () => { md.hidden = true; };
+  md.onclick = (e) => { if (e.target === md) md.hidden = true; };
+  md.hidden = false;
+}
 </script>
 <script>/* LK 퍼니쳐 — 상판 발주
    도면의 싱크대(하부장) 상판을 위에서 본 평면도로 자동으로 그리고, 업체에 보낼 상판 발주서를 만든다.
