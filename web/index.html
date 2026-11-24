@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' file: data: blob:; img-src 'self' file: data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' file: data:; script-src 'self' file: 'unsafe-inline'">
-<title>LK 퍼니쳐 (웹판 1.1.7)</title>
+<title>LK 퍼니쳐 (웹판 1.1.8)</title>
 <style>/* LK 퍼니쳐 — 밝은 작업대 + 청사진 파랑 + 선택 주황 */
 :root {
   --bg: #EEF1F5;
@@ -614,6 +614,12 @@ body.easy .adv { display: none !important; }
 .fin-custom input[type=color] { width: 38px; height: 30px; padding: 1px; }
 .fin-custom input[type=text] { width: 280px; padding: 6px 8px; }
 .fin-custom small { color: var(--ink2); }
+/* 칸 자리 바꾸기 */
+#canvas.moving, #canvas.moving * { cursor: grabbing !important; }
+#canvas .hit.mv-src { fill: rgba(31, 95, 191, .14) !important; stroke: #1F5FBF; stroke-width: 6; stroke-dasharray: 30 18; }
+#canvas .hit.mv-tgt { fill: rgba(242, 140, 40, .22) !important; stroke: #F28C28; stroke-width: 8; }
+.mv-tip { position: fixed; z-index: 90; pointer-events: none; background: #1B2230; color: #fff; font-size: 12.5px; padding: 5px 9px; border-radius: 7px; box-shadow: 0 6px 18px -6px rgba(0,0,0,.4); }
+.mv-tip.bad { background: #8A93A3; }
 </style>
 </head>
 <body>
@@ -5239,12 +5245,14 @@ function renderCanvas() {
   if (state.view !== '2d') return;
   if (sk.on) { bindSketch(svg, f); return; }
   svg.addEventListener('click', (e) => {
+    if (mv.justMoved) { mv.justMoved = false; return; }
     const ed = e.target.closest('[data-ed]');
     if (ed) { e.stopPropagation(); editDim(ed, f, e); return; }
     const hit = e.target.closest('.hit');
     state.sel.mid = hit ? hit.dataset.mid : null;
     renderCanvas(); renderInspector(); renderLibrary();
   });
+  bindMoveDrag(svg, f, box);
   svg.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('text/lk-lib')) { e.preventDefault(); box.classList.add('drop-on'); } });
   svg.addEventListener('dragleave', () => box.classList.remove('drop-on'));
   svg.addEventListener('drop', (e) => {
@@ -5469,6 +5477,11 @@ function inspectModule(box, f, { row, m, i }) {
   const acts = document.createElement('div'); acts.className = 'row-btns';
   const mkb = (label, fn, cls = '') => { const b = document.createElement('button'); b.className = 'btn ' + cls; b.textContent = label; b.onclick = fn; acts.appendChild(b); };
   const clone = () => { const n = E.newModule(JSON.parse(JSON.stringify(m))); n.id = E.uid('m'); n.auto = true; if (n.kind === 'filler' || n.kind === 'corner') { n.kind = 'door'; n.doors = 2; if (['코너장', '오각장'].includes(n.label)) n.label = ''; } return n; };
+  if (m.kind !== 'corner') {
+    const nb = (d) => { const j = i + d; return j >= 0 && j < row.modules.length && row.modules[j].kind !== 'corner'; };
+    if (nb(-1)) mkb('◀ 왼쪽 칸과 자리 바꾸기', () => swapModules(f, m.id, row.modules[i - 1].id));
+    if (nb(1)) mkb('오른쪽 칸과 자리 바꾸기 ▶', () => swapModules(f, m.id, row.modules[i + 1].id));
+  }
   mkb('← 왼쪽에 칸 추가', () => { row.modules.splice(i, 0, clone()); changed(); });
   mkb('오른쪽에 칸 추가 →', () => { const n = clone(); row.modules.splice(i + 1, 0, n); state.sel.mid = n.id; changed(); });
   mkb('모든 칸 폭 똑같이', () => { row.modules.forEach(x => { if (x.kind !== 'filler' && x.kind !== 'corner') x.auto = true; }); changed(); });
@@ -7135,6 +7148,59 @@ function openFinPicker(key, title, cur, done) {
   md.onclick = (e) => { if (e.target === md) close(); };
   draw(); md.hidden = false;
 }
+
+// ---------- 칸 자리 바꾸기 (정면도에서 끌어다 놓기 · 버튼 · Alt+←/→) ----------
+const mv = { on: null, justMoved: false };
+function swapModules(f, aId, bId) {
+  const A = findM(f, aId), B = findM(f, bId);
+  if (!A || !B || A.row !== B.row || aId === bId) return false;
+  if (A.m.kind === 'corner' || B.m.kind === 'corner') { toast('코너장은 줄 끝에 붙어 있어서 옮길 수 없어요.'); return false; }
+  const r = A.row, na = A.m.label || A.m.kind, i = A.i, j = B.i;
+  const nos = (() => { const g = state.calc.geo; const no = (id) => (g.find(x => x.m === id && x.type === 'body') || {}).no || ''; return [no(aId), no(bId)]; })();
+  [r.modules[i], r.modules[j]] = [r.modules[j], r.modules[i]];
+  state.sel.mid = aId; changed();
+  toast(`${nos[0]} ↔ ${nos[1]} 자리를 바꿨어요. 폭·문·기구는 칸을 따라가요. (되돌리기: Ctrl+Z)`);
+  return true;
+}
+function bindMoveDrag(svg, f, box) {
+  const hitAt = (e) => { const el = document.elementFromPoint(e.clientX, e.clientY); return el && el.closest ? el.closest('#canvas .hit') : null; };
+  svg.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const h = e.target.closest('.hit'); if (!h) return;
+    const fm = findM(f, h.dataset.mid); if (!fm || fm.m.kind === 'corner') return;
+    mv.on = { mid: h.dataset.mid, row: fm.row, x: e.clientX, y: e.clientY, drag: false, src: h, tgt: null, tip: null };
+  });
+  const move = (e) => {
+    const d = mv.on; if (!d) return;
+    if (!d.drag) { if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 8) return; d.drag = true; d.src.classList.add('mv-src'); box.classList.add('moving'); d.tip = document.createElement('div'); d.tip.className = 'mv-tip'; document.body.appendChild(d.tip); }
+    const h = hitAt(e);
+    const fm = h && findM(f, h.dataset.mid);
+    const ok = fm && fm.row === d.row && fm.m.kind !== 'corner' && h.dataset.mid !== d.mid;
+    if (d.tgt && d.tgt !== h) d.tgt.classList.remove('mv-tgt');
+    d.tgt = ok ? h : null; if (d.tgt) d.tgt.classList.add('mv-tgt');
+    d.tip.style.left = (e.clientX + 14) + 'px'; d.tip.style.top = (e.clientY + 14) + 'px';
+    d.tip.textContent = ok ? '여기 놓으면 두 칸 자리를 바꿔요' : fm && fm.row !== d.row ? '같은 줄(하부↔하부, 상부↔상부)에서만 바꿀 수 있어요' : '바꿀 칸 위에 놓으세요';
+    d.tip.classList.toggle('bad', !ok);
+    e.preventDefault();
+  };
+  const up = () => {
+    const d = mv.on; mv.on = null;
+    window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up);
+    if (!d || !d.drag) return;
+    box.classList.remove('moving'); d.src.classList.remove('mv-src'); if (d.tgt) d.tgt.classList.remove('mv-tgt'); if (d.tip) d.tip.remove();
+    mv.justMoved = true; setTimeout(() => { mv.justMoved = false; }, 300);
+    if (d.tgt) swapModules(f, d.mid, d.tgt.dataset.mid);
+  };
+  svg.addEventListener('mousedown', () => { if (mv.on) { window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); } });
+}
+window.addEventListener('keydown', (e) => {
+  if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+  if (/INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || '')) return;
+  const f = state.sel.fid && findF(state.sel.fid); const fm = f && state.sel.mid && findM(f, state.sel.mid); if (!fm) return;
+  const j = fm.i + (e.key === 'ArrowLeft' ? -1 : 1);
+  if (j < 0 || j >= fm.row.modules.length) return;
+  e.preventDefault(); swapModules(f, fm.m.id, fm.row.modules[j].id);
+});
 </script>
 <script>/* LK 퍼니쳐 — 상판 발주
    도면의 싱크대(하부장) 상판을 위에서 본 평면도로 자동으로 그리고, 업체에 보낼 상판 발주서를 만든다.
