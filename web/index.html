@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' file: data: blob:; img-src 'self' file: data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' file: data:; script-src 'self' file: 'unsafe-inline'">
-<title>LK 퍼니쳐 (웹판 1.1.9)</title>
+<title>LK 퍼니쳐 (웹판 1.2.0)</title>
 <style>/* LK 퍼니쳐 — 밝은 작업대 + 청사진 파랑 + 선택 주황 */
 :root {
   --bg: #EEF1F5;
@@ -622,6 +622,11 @@ body.easy .adv { display: none !important; }
 .mv-tip.bad { background: #8A93A3; }
 .fit-list { margin: 8px 0 4px; padding-left: 18px; font-size: 13.5px; line-height: 1.7; }
 .fit-list li.warn { color: #B45309; }
+/* 주문제작 (비규격) — Panelizer 한글판을 그대로 띄움 */
+.page[data-page="custom"].on { display: block; overflow: hidden; }
+#customFrame { width: 100%; height: 100%; border: 0; display: block; background: #1E222A; }
+#tabs .tab-custom { margin-left: 10px; }
+#tabs .tab-custom i { background: #F28C28; color: #fff; }
 </style>
 </head>
 <body>
@@ -634,6 +639,7 @@ body.easy .adv { display: none !important; }
     <button data-page="quote"><i>4</i>견적</button>
     <button data-page="cutlist"><i>5</i>재단표</button>
     <button data-page="optimize"><i>6</i>재단 최적화</button>
+    <button data-page="custom" class="tab-custom" title="고객 요청 비규격 제품: 측판·상판·뒷판을 하나씩 붙여서 만들기"><i>★</i>주문제작</button>
   </nav>
   <div class="top-right">
     <span id="saveState"></span>
@@ -778,6 +784,9 @@ body.easy .adv { display: none !important; }
   </section>
 
   <!-- 6. 재단 최적화 -->
+  <section class="page" data-page="custom">
+    <iframe id="customFrame" title="주문제작 (비규격)" allow="clipboard-write"></iframe>
+  </section>
   <section class="page" data-page="optimize">
     <div class="doc-bar">
       <div class="seg" id="optMode"><button data-m="cnc" title="공장 CNC 라우터(네스팅) — 부재 사이를 공구 지름만큼 띄움">CNC 라우터</button><button data-m="saw" title="패널쏘·재단기 — 길게 켜고 가로로 자르는 일자 재단">패널쏘</button></div>
@@ -900,6 +909,7 @@ body.easy .adv { display: none !important; }
       <div class="start-brand"><span class="brand-mark big" aria-hidden="true"></span><div><h1>LK 퍼니쳐</h1><p>실측 치수만 넣으면 도면·견적·재단표가 한 번에</p></div></div>
       <div class="start-actions">
         <button class="start-btn primary" id="stNew"><b>새 현장 시작</b><span>고객과 현장 정보부터 입력</span></button>
+        <button class="start-btn" id="stCustom"><b>주문제작 (비규격)</b><span>고객 요청 제품을 판넬 하나씩 붙여서 설계·재단</span></button>
         <button class="start-btn" id="stTop"><b>상판만 발주</b><span>가구 설계 없이 상판 모양·치수만 넣어 발주</span></button>
         <button class="start-btn" id="stOpen"><b>다른 곳의 파일 열기</b><span>USB·카톡으로 받은 .lkf 파일</span></button>
         <button class="start-btn" id="stResume" hidden><b>이전 작업 이어서</b><span id="stResumeName"></span></button>
@@ -4640,6 +4650,7 @@ setInterval(() => { if (P() && state.dirty) { LK.autosaveWrite(JSON.stringify(P(
 // ================= 페이지 이동 =================
 function go(page) {
   state.page = page;
+  if (page === 'custom') { const fr = $('#customFrame'); if (fr && !fr.getAttribute('src')) fr.src = 'custom/index.html'; }
   $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.page === page));
   $('#btnSettings').classList.toggle('on', page === 'settings');
   $$('.page').forEach(p => p.classList.toggle('on', p.dataset.page === page));
@@ -7123,6 +7134,7 @@ function bind() {
   $('#btnOptPDF').onclick = () => saveDocPDF(buildDoc('sheets'));
   // 시작 화면
   $('#stNew').onclick = newProject;
+  $('#stCustom').onclick = () => { if (!P()) { state.project = E.newProject(); state.sel = { fid: null, mid: null }; resetHistory(); recalc(); } $('#startModal').hidden = true; go('custom'); renderAll(); };
   $('#stTop').onclick = () => { newProject(); P().site.name = P().site.name || '상판 발주'; TopOrder.open(); $('#tpAddFree').click(); };
   $('#btnTop').onclick = () => TopOrder.open();
   { let ez = null; try { ez = localStorage.getItem('lkEasy'); } catch (e) {} setEasy(ez == null ? true : ez === '1'); }
